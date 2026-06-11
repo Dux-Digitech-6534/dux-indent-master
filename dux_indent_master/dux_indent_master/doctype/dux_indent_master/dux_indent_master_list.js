@@ -18,17 +18,25 @@ function get_docstatus_label(docstatus) {
 }
 
 function get_status_indicator_color(status) {
-    if (status === "Draft") {
-        return "gray";
-    }
-    if (status === "Cancelled") {
-        return "red";
-    }
-    if (status === "Closed" || status === "Received") {
-        return "green";
-    }
-    if ((status || "").includes("Partially")) {
-        return "orange";
-    }
-    return "blue";
+    const color_map = {
+        "Draft": "gray",
+        "Open": "gray",
+        "Approved": "blue",
+        "Submitted": "blue",
+        "Material Purchase Created": "orange",
+        "Material Request Raised": "orange",
+        "Purchase Requested": "orange",
+        "Ordered": "orange",
+        "Partially Purchase Requested": "yellow",
+        "Partially Request Raised": "yellow",
+        "Partially Ordered": "yellow",
+        "Partially Received": "yellow",
+        "Partially Delivered": "yellow",
+        "Completed": "green",
+        "Received": "green",
+        "Closed": "red",
+        "Cancelled": "red",
+    };
+
+    return color_map[status] || "gray";
 }

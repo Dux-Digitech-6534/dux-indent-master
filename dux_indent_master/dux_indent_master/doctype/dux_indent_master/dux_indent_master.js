@@ -10,6 +10,7 @@ frappe.ui.form.on("Dux Indent Master", {
         lock_tracking_grids(frm);
         bind_item_selection_events(frm);
         update_view_stock_button(frm);
+        apply_closed_form_lock(frm);
     },
 
     refresh(frm) {
@@ -21,7 +22,7 @@ frappe.ui.form.on("Dux Indent Master", {
         bind_item_selection_events(frm);
         update_view_stock_button(frm);
         add_actions_buttons(frm);
-        add_close_indent_button(frm);
+        apply_closed_form_lock(frm);
 
         if (frm.is_new()) {
             load_logged_in_user_details(frm);
@@ -121,19 +122,27 @@ function get_docstatus_label(docstatus) {
 }
 
 function get_status_indicator_color(status) {
-    if (status === "Draft") {
-        return "gray";
-    }
-    if (status === "Cancelled") {
-        return "red";
-    }
-    if (status === "Closed" || status === "Received") {
-        return "green";
-    }
-    if ((status || "").includes("Partially")) {
-        return "orange";
-    }
-    return "blue";
+    const color_map = {
+        "Draft": "gray",
+        "Open": "gray",
+        "Approved": "blue",
+        "Submitted": "blue",
+        "Material Purchase Created": "orange",
+        "Material Request Raised": "orange",
+        "Purchase Requested": "orange",
+        "Ordered": "orange",
+        "Partially Purchase Requested": "yellow",
+        "Partially Request Raised": "yellow",
+        "Partially Ordered": "yellow",
+        "Partially Received": "yellow",
+        "Partially Delivered": "yellow",
+        "Completed": "green",
+        "Received": "green",
+        "Closed": "red",
+        "Cancelled": "red",
+    };
+
+    return color_map[status] || "gray";
 }
 
 function load_logged_in_user_details(frm) {
@@ -214,6 +223,71 @@ function hide_tracking_grid_controls(grid) {
     grid.wrapper
         .find(".grid-add-row, .grid-remove-rows, .grid-delete-row, .grid-insert-row, .grid-duplicate-row")
         .hide();
+}
+
+function apply_closed_form_lock(frm) {
+    if (!is_closed_status(frm)) {
+        return;
+    }
+
+    if (typeof frm.disable_save === "function") {
+        frm.disable_save();
+    }
+
+    Object.keys(frm.fields_dict || {}).forEach((fieldname) => {
+        const field = frm.fields_dict[fieldname];
+        const df = field && field.df;
+        if (!df || ["Section Break", "Column Break", "HTML", "Button"].includes(df.fieldtype)) {
+            return;
+        }
+        frm.set_df_property(fieldname, "read_only", 1);
+    });
+
+    ["items", "material_purchase", "delivery_challans"].forEach((fieldname) => {
+        lock_child_table_for_closed(frm, fieldname);
+    });
+
+    ["Material Purchase", "Delivery Challan"].forEach((label) => {
+        frm.remove_custom_button(__(label));
+        frm.remove_custom_button(__(label), __("Actions"));
+    });
+
+    frm.dashboard && frm.dashboard.set_headline(__("Status: Closed"));
+    setTimeout(() => {
+        ["items", "material_purchase", "delivery_challans"].forEach((fieldname) => {
+            lock_child_table_for_closed(frm, fieldname);
+        });
+    }, 0);
+}
+
+function lock_child_table_for_closed(frm, fieldname) {
+    if (!frm.fields_dict[fieldname]) {
+        return;
+    }
+
+    frm.set_df_property(fieldname, "read_only", 1);
+    const grid = frm.fields_dict[fieldname].grid;
+    if (!grid || !grid.wrapper) {
+        return;
+    }
+
+    grid.cannot_add_rows = true;
+    grid.cannot_delete_rows = true;
+    grid.only_sortable = false;
+    (grid.docfields || []).forEach((df) => {
+        grid.update_docfield_property(df.fieldname, "read_only", 1);
+    });
+
+    grid.wrapper
+        .find(
+            ".grid-add-row, .grid-remove-rows, .grid-delete-row, .grid-insert-row, .grid-duplicate-row, .grid-row-open, .btn-open-row, .grid-edit-row"
+        )
+        .hide();
+    grid.wrapper.find("input, select, textarea, button").prop("disabled", true);
+}
+
+function is_closed_status(frm) {
+    return frm.doc.status === "Closed" || Boolean(frm.doc.manually_closed);
 }
 
 function set_row_item_trackers(frm) {
@@ -494,39 +568,6 @@ function add_actions_buttons(frm) {
         frm.add_custom_button(__("Material Purchase"), () => show_material_purchase_dialog(frm), __("Actions"));
     }
     frm.add_custom_button(__("Delivery Challan"), () => create_delivery_challan(frm), __("Actions"));
-}
-
-function add_close_indent_button(frm) {
-    frm.remove_custom_button(__("Close Indent"));
-
-    if (frm.is_new() || frm.doc.docstatus !== 1 || is_indent_closed(frm)) {
-        return;
-    }
-
-    frm.add_custom_button(__("Close Indent"), () => {
-        frappe.confirm(
-            __("Are you sure you want to close this indent? After closing, no further Material Request or Delivery Challan should be created from this indent."),
-            () => {
-                frappe.call({
-                    method: "dux_indent_master.api.close_indent",
-                    args: {
-                        indent_name: frm.doc.name,
-                    },
-                    freeze: true,
-                    freeze_message: __("Closing Indent..."),
-                    callback(r) {
-                        if (r.message && r.message.status === "Closed") {
-                            frappe.show_alert({
-                                message: __("Dux Indent Master closed."),
-                                indicator: "green",
-                            });
-                            frm.reload_doc();
-                        }
-                    },
-                });
-            }
-        );
-    });
 }
 
 function is_indent_closed(frm) {

@@ -1019,6 +1019,7 @@ def _save_indent(indent, ignore_links=False):
         return
 
     indent.flags.ignore_validate_update_after_submit = True
+    indent.flags.ignore_closed_validation = True
     if ignore_links:
         indent.flags.ignore_links = True
     indent.save(ignore_permissions=True)

@@ -11,12 +11,56 @@ from dux_indent_master.api import _get_logged_in_user_details
 
 class DuxIndentMaster(Document):
     def validate(self):
+        self.validate_closed_document_not_edited()
         self.set_logged_in_user_fields()
         self.set_item_balances()
         self.set_delivery_stock_display()
         self.validate_required_dates()
         self.validate_items()
         self.set_draft_status()
+
+    def validate_closed_document_not_edited(self):
+        if self.flags.ignore_closed_validation or self.is_new() or self.docstatus == 2:
+            return
+
+        previous = self.get_doc_before_save()
+        if not previous:
+            return
+
+        was_closed = previous.status == "Closed" or bool(previous.get("manually_closed"))
+        if not was_closed:
+            return
+
+        if self.status != "Closed" and not self.get("manually_closed"):
+            frappe.throw(_("Closed Dux Indent Master cannot be reopened by editing the document. Please amend it."))
+
+        if self._business_state(previous) != self._business_state(self):
+            frappe.throw(_("Closed Dux Indent Master is read-only. Please amend it to make changes."))
+
+    def _business_state(self, doc):
+        data = doc.as_dict(no_nulls=False)
+        for key in (
+            "modified",
+            "modified_by",
+            "owner",
+            "creation",
+            "idx",
+            "_user_tags",
+            "_comments",
+            "_assign",
+            "_liked_by",
+            "status",
+            "manually_closed",
+            "closed_by",
+            "closed_on",
+        ):
+            data.pop(key, None)
+
+        for field in (doc.meta.get_table_fields() or []):
+            for row in data.get(field.fieldname) or []:
+                for key in ("modified", "modified_by", "owner", "creation", "idx"):
+                    row.pop(key, None)
+        return data
 
     def set_logged_in_user_fields(self):
         details = _get_logged_in_user_details()
@@ -98,7 +142,7 @@ class DuxIndentMaster(Document):
             self.status = "Cancelled"
             return
 
-        if self.meta.has_field("manually_closed") and self.get("manually_closed"):
+        if self.status == "Closed" or (self.meta.has_field("manually_closed") and self.get("manually_closed")):
             self.status = "Closed"
             return
 
