@@ -1,0 +1,235 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "naming_series:",
+ "creation": "2026-06-03 17:21:38.829711",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_break_basic",
+  "user_full_name",
+  "user_name",
+  "department_name",
+  "company_name",
+  "column_break_dates",
+  "naming_series",
+  "transaction_date",
+  "required_date",
+  "section_break_details",
+  "note_attachment",
+  "design_attachment",
+  "remark",
+  "status",
+  "manually_closed",
+  "closed_by",
+  "closed_on",
+  "section_break_items",
+  "items",
+  "section_break_material_purchase",
+  "material_purchase",
+  "section_break_delivery_challans",
+  "delivery_challans",
+  "amended_from"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_basic",
+   "fieldtype": "Section Break",
+   "label": "Details"
+  },
+  {
+   "fieldname": "user_full_name",
+   "fieldtype": "Data",
+   "label": "User Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "user_name",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "User",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "department_name",
+   "fieldtype": "Link",
+   "label": "Department Name",
+   "options": "Department",
+   "read_only": 1
+  },
+  {
+   "fieldname": "company_name",
+   "fieldtype": "Link",
+   "label": "Company Name",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_dates",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "DIM-.YYYY.-.#####",
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "options": "DIM-.YYYY.-.#####",
+   "reqd": 1
+  },
+  {
+   "default": "Today",
+   "fieldname": "transaction_date",
+   "fieldtype": "Date",
+   "label": "Transaction Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "required_date",
+   "fieldtype": "Date",
+   "label": "Required Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_details",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "note_attachment",
+   "fieldtype": "Attach",
+   "label": "Note Attachment"
+  },
+  {
+   "fieldname": "design_attachment",
+   "fieldtype": "Attach",
+   "label": "Design Attachment"
+  },
+  {
+   "fieldname": "remark",
+   "fieldtype": "Small Text",
+   "label": "Remark"
+  },
+  {
+   "allow_on_submit": 1,
+   "bold": 1,
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Draft\nPending\nApproved\nPartially Request Raised\nMaterial Request Raised\nPartially Ordered\nOrdered\nPartially Received\nReceived\nPurchase Request Raised\nPartially Delivered\nPartially Purchased\nFully Purchased\nClosed\nCancelled"
+  },
+  {
+   "allow_on_submit": 1,
+   "default": "0",
+   "fieldname": "manually_closed",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Manually Closed",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "closed_by",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Closed By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "closed_on",
+   "fieldtype": "Datetime",
+   "hidden": 1,
+   "label": "Closed On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_items",
+   "fieldtype": "Section Break",
+   "label": "Items"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "items",
+   "fieldtype": "Table",
+   "label": "Items",
+   "options": "Dux Indent Master Item"
+  },
+  {
+   "fieldname": "section_break_material_purchase",
+   "fieldtype": "Section Break",
+   "label": "Material Purchase"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "material_purchase",
+   "fieldtype": "Table",
+   "label": "Material Purchase",
+   "options": "Dux Indent Material Purchase"
+  },
+  {
+   "fieldname": "section_break_delivery_challans",
+   "fieldtype": "Section Break",
+   "label": "Delivery Challans"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "delivery_challans",
+   "fieldtype": "Table",
+   "label": "Delivery Challans",
+   "options": "Dux Indent Delivery Challan"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Dux Indent Master",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-06-03 18:22:29.816566",
+ "modified_by": "Administrator",
+ "module": "Dux Indent Master",
+ "name": "Dux Indent Master",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "role": "Purchase User",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Stock User"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

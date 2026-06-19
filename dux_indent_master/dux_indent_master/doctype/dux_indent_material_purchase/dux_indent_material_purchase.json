@@ -1,0 +1,60 @@
+{
+ "actions": [],
+ "creation": "2026-06-03 17:21:38.829711",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "material_purchase_id",
+  "status",
+  "transaction_date",
+  "total_qty"
+ ],
+ "fields": [
+  {
+   "allow_on_submit": 1,
+   "fieldname": "material_purchase_id",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Material Purchase ID",
+   "options": "Material Request",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Draft\nPending\nSubmitted\nCompleted\nCancelled",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "transaction_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Transaction Date",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "total_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Total Qty",
+   "read_only": 1
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-06-03 18:22:29.816566",
+ "modified_by": "Administrator",
+ "module": "Dux Indent Master",
+ "name": "Dux Indent Material Purchase",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

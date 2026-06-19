@@ -1,0 +1,141 @@
+{
+ "actions": [],
+ "creation": "2026-06-03 17:21:38.829711",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "item_code",
+  "required_date",
+  "qty",
+  "purchase_qty",
+  "delivery_challan_qty",
+  "delivery_balance_qty",
+  "qty_balanced",
+  "uom",
+  "warehouse",
+  "specification",
+  "stock_qty",
+  "source_warehouse",
+  "material_request",
+  "material_request_item"
+ ],
+ "fields": [
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "required_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Required Date"
+  },
+  {
+   "fieldname": "qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Qty",
+   "reqd": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "default": "0",
+   "fieldname": "purchase_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Purchase Qty",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "default": "0",
+   "fieldname": "delivery_challan_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Delivery Challan Qty",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "delivery_balance_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Delivery Balance Qty",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "qty_balanced",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Qty Balanced",
+   "read_only": 1
+  },
+  {
+   "fieldname": "uom",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "UOM",
+   "options": "UOM"
+  },
+  {
+   "fieldname": "warehouse",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Warehouse",
+   "options": "Warehouse"
+  },
+  {
+   "fieldname": "specification",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Specification"
+  },
+  {
+   "fieldname": "stock_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Stock Qty",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_warehouse",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Source Warehouse",
+   "options": "Warehouse",
+   "print_hide": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "material_request",
+   "fieldtype": "Link",
+   "label": "Material Request",
+   "options": "Material Request",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "material_request_item",
+   "fieldtype": "Data",
+   "label": "Material Request Item",
+   "read_only": 1
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-06-03 18:22:29.816566",
+ "modified_by": "Administrator",
+ "module": "Dux Indent Master",
+ "name": "Dux Indent Master Item",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

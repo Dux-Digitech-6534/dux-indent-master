@@ -12,14 +12,6 @@ doc_events = {
         "on_submit": "dux_indent_master.api.on_material_request_submit",
         "on_cancel": "dux_indent_master.api.on_material_request_cancel",
     },
-    "Purchase Order": {
-        "on_submit": "dux_indent_master.api.on_purchase_order_submit",
-        "on_cancel": "dux_indent_master.api.on_purchase_order_cancel",
-    },
-    "Purchase Receipt": {
-        "on_submit": "dux_indent_master.api.on_purchase_receipt_submit",
-        "on_cancel": "dux_indent_master.api.on_purchase_receipt_cancel",
-    },
     "Delivery Challan": {
         "validate": "dux_indent_master.api.on_delivery_challan_validate",
         "before_submit": "dux_indent_master.api.on_delivery_challan_before_submit",
