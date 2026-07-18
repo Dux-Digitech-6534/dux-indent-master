@@ -2,6 +2,11 @@
 
 Dux Indent Master app
 
+It includes the **Dux Procurement Portal**, a responsive Desk page that brings
+the supported buying, stock, accounts and indent workflows into one
+permission-aware interface. Create and edit forms stay inside the portal and
+support draft saving, child rows and native document submission.
+
 ### Installation
 
 You can install this app using the [bench](https://github.com/frappe/bench) CLI:
@@ -10,7 +15,16 @@ You can install this app using the [bench](https://github.com/frappe/bench) CLI:
 cd $PATH_TO_YOUR_BENCH
 bench get-app $URL_OF_THIS_REPO --branch develop
 bench install-app dux_indent_master
+bench --site your-site migrate
+bench build --app dux_indent_master
+bench --site your-site clear-cache
 ```
+
+Open the portal at `/app/dux-indent-portal` after signing in. ERPNext and
+`delivery_challan_custom` must be installed before this app.
+
+See [docs/DUX_PROCUREMENT_PORTAL.md](docs/DUX_PROCUREMENT_PORTAL.md) for the
+screen mapping, permission model and production update procedure.
 
 ### Contributing
 

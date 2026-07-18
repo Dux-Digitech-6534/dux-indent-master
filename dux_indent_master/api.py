@@ -302,9 +302,39 @@ def create_delivery_challan_from_indent(indent_name):
             )
         )
 
+    stock_keys = {
+        (row.item_code, warehouse)
+        for (row, balance_qty), warehouse in zip(rows, warehouses)
+    }
+    available_stock_qty = _get_available_delivery_stock_qty_map(stock_keys)
+    delivery_rows = []
+    stock_limited_items = []
+
+    for (row, balance_qty), warehouse in zip(rows, warehouses):
+        stock_key = (row.item_code, warehouse)
+        available_qty = max(flt(available_stock_qty.get(stock_key)), 0)
+        qty = min(flt(balance_qty), available_qty)
+
+        if qty <= 0:
+            stock_limited_items.append(row.item_code)
+            continue
+
+        delivery_rows.append((row, qty, warehouse))
+        available_stock_qty[stock_key] = max(available_qty - qty, 0)
+        if qty < flt(balance_qty):
+            stock_limited_items.append(row.item_code)
+
+    if not delivery_rows:
+        frappe.throw(
+            _(
+                "Delivery Challan cannot be created because available stock is zero "
+                "or already reserved in another open Delivery Challan."
+            )
+        )
+
     company = indent.company_name
     transit_warehouse = _get_delivery_challan_transit_warehouse(company)
-    default_warehouse = warehouses[0]
+    default_warehouse = delivery_rows[0][2]
 
     delivery_challan = frappe.new_doc("Delivery Challan")
     delivery_challan.company = company
@@ -318,8 +348,7 @@ def create_delivery_challan_from_indent(indent_name):
     _set_if_field(delivery_challan, "custom_dux_indent_required_date", indent.required_date)
 
     total_qty = 0
-    for (row, balance_qty), warehouse in zip(rows, warehouses):
-        qty = flt(balance_qty)
+    for row, qty, warehouse in delivery_rows:
         if qty <= 0:
             frappe.throw(_("Delivery Challan Qty must be greater than zero for {0}.").format(row.item_code))
 
@@ -350,16 +379,28 @@ def create_delivery_challan_from_indent(indent_name):
     )
     indent.update_purchase_status()
     _save_indent(indent)
+
+    if stock_limited_items:
+        frappe.msgprint(
+            _("Delivery quantity was limited to available stock for: {0}.").format(
+                ", ".join(sorted(set(stock_limited_items)))
+            ),
+            indicator="orange",
+            title=_("Stock Limited"),
+        )
+
     return {"doctype": delivery_challan.doctype, "name": delivery_challan.name}
 
 
 def on_delivery_challan_validate(doc, method=None):
     _set_delivery_challan_item_quantities(doc)
+    _validate_delivery_challan_stock_limits(doc)
 
 
 def on_delivery_challan_before_submit(doc, method=None):
     _set_delivery_challan_item_quantities(doc)
     _validate_delivery_challan_qty_limits(doc)
+    _validate_delivery_challan_stock_limits(doc)
 
 
 def on_delivery_challan_submit(doc, method=None):
@@ -728,6 +769,132 @@ def _validate_delivery_challan_qty_limits(doc):
                     total_qty, allowed_qty, indent_row.item_code
                 )
             )
+
+
+def _validate_delivery_challan_stock_limits(doc):
+    if not doc.get("custom_dux_indent_master"):
+        return
+
+    quantities = defaultdict(float)
+    for row in doc.get("items") or []:
+        warehouse = row.get("source_warehouse") or doc.get("source_warehouse")
+        if not row.item_code or not warehouse:
+            continue
+        quantities[(row.item_code, warehouse)] += _get_delivery_challan_item_qty(row)
+
+    if not quantities:
+        return
+
+    available_stock_qty = _get_available_delivery_stock_qty_map(
+        set(quantities),
+        exclude_delivery_challan=doc.name,
+    )
+    for (item_code, warehouse), qty in quantities.items():
+        available_qty = max(flt(available_stock_qty.get((item_code, warehouse))), 0)
+        if flt(qty) > available_qty:
+            frappe.throw(
+                _(
+                    "Delivery Challan Qty {0} cannot exceed available stock {1} "
+                    "for item {2} in warehouse {3}."
+                ).format(qty, available_qty, item_code, warehouse),
+                title=_("Insufficient Stock"),
+            )
+
+
+def _get_available_delivery_stock_qty_map(stock_keys, exclude_delivery_challan=None):
+    stock_keys = set(stock_keys or [])
+    if not stock_keys:
+        return {}
+
+    actual_stock_qty = _get_stock_qty_map(stock_keys)
+    reserved_stock_qty = _get_open_delivery_stock_reservation_map(
+        stock_keys,
+        exclude_delivery_challan=exclude_delivery_challan,
+    )
+    return {
+        stock_key: max(
+            flt(actual_stock_qty.get(stock_key)) - flt(reserved_stock_qty.get(stock_key)),
+            0,
+        )
+        for stock_key in stock_keys
+    }
+
+
+def _get_stock_qty_map(stock_keys):
+    stock_keys = set(stock_keys or [])
+    if not stock_keys:
+        return {}
+
+    sorted_stock_keys = sorted(
+        (item_code, warehouse)
+        for item_code, warehouse in stock_keys
+        if item_code and warehouse
+    )
+    if not sorted_stock_keys:
+        return {}
+
+    stock_qty = {stock_key: 0 for stock_key in stock_keys}
+    conditions = []
+    values = []
+    for item_code, warehouse in sorted_stock_keys:
+        conditions.append("(item_code = %s and warehouse = %s)")
+        values.extend([item_code, warehouse])
+
+    # Serialize DC creation/submission for the same stock bins. The lock remains
+    # active until the request transaction commits, after the draft/submit state
+    # used by the reservation query has also been persisted.
+    rows = frappe.db.sql(
+        f"""
+        select item_code, warehouse, actual_qty
+        from `tabBin`
+        where {" or ".join(conditions)}
+        order by item_code, warehouse
+        for update
+        """,
+        values,
+        as_dict=True,
+    )
+    for row in rows:
+        stock_key = (row.item_code, row.warehouse)
+        if stock_key in stock_qty:
+            stock_qty[stock_key] = flt(row.actual_qty)
+    return stock_qty
+
+
+def _get_open_delivery_stock_reservation_map(stock_keys, exclude_delivery_challan=None):
+    stock_keys = set(stock_keys or [])
+    if not stock_keys or not frappe.db.exists("DocType", "Delivery Challan"):
+        return {}
+
+    conditions = ["dc.docstatus < 2"]
+    values = []
+    if frappe.db.has_column("Delivery Challan", "dispatch_stock_entry"):
+        conditions.append("coalesce(dc.dispatch_stock_entry, '') = ''")
+    if exclude_delivery_challan:
+        conditions.append("dc.name != %s")
+        values.append(exclude_delivery_challan)
+
+    rows = frappe.db.sql(
+        f"""
+        select
+            item.item_code,
+            item.source_warehouse as warehouse,
+            sum(coalesce(item.qty, 0)) as qty
+        from `tabDelivery Challan Item` item
+        inner join `tabDelivery Challan` dc on dc.name = item.parent
+        where {" and ".join(conditions)}
+          and coalesce(item.item_code, '') != ''
+          and coalesce(item.source_warehouse, '') != ''
+        group by item.item_code, item.source_warehouse
+        """,
+        values,
+        as_dict=True,
+    )
+    return {
+        (row.item_code, row.warehouse): flt(row.qty)
+        for row in rows
+        if (row.item_code, row.warehouse) in stock_keys
+    }
 
 
 def _sync_delivery_challan_tracking(indent_name, ignore_links=False):

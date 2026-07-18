@@ -5,6 +5,11 @@ app_description = "Dux Indent Master app"
 app_email = "support@duxdigitech.in"
 app_license = "mit"
 
+# The portal and indent workflow extend ERPNext procurement documents and the
+# Delivery Challan custom app. Declaring these dependencies makes bench refuse
+# an incomplete production installation instead of failing later at runtime.
+required_apps = ["erpnext", "delivery_challan_custom"]
+
 after_migrate = "dux_indent_master.setup.after_migrate"
 
 doc_events = {
