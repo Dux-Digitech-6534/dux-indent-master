@@ -20,6 +20,14 @@ body.dux-portal-active .desk-navbar {
 	display: none !important;
 }
 
+/* Frappe v16 renders its global Desk menu beside .main-section. Keep that
+   shell hidden only while the self-contained Dux portal route is active. */
+body.dux-portal-active .body-sidebar-container,
+body.dux-portal-active .desk-sidebar-container,
+body.dux-portal-active .desk-sidebar {
+	display: none !important;
+}
+
 .duxp-root {
 	--duxp-iris: #5c4de6;
 	--duxp-iris-deep: #4a3cd0;
