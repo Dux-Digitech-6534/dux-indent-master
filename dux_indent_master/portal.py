@@ -11,6 +11,7 @@ from dux_indent_master.api import _get_logged_in_user_details
 
 SYSTEM_FIELDS = {"name", "owner", "creation", "modified", "modified_by", "docstatus"}
 MAX_PAGE_LENGTH = 50
+COUNT_PAGE_LENGTH = 500
 
 
 # These are ERPNext's own document mappers. Keeping the methods in an
@@ -2056,14 +2057,27 @@ def _field_exists(meta, fieldname):
 
 
 def _permission_aware_count(doctype, filters, or_filters=None):
-    result = frappe.get_list(
-        doctype,
-        fields=["count(name) as total"],
-        filters=filters,
-        or_filters=or_filters or [],
-        limit_page_length=1,
-    )
-    return cint(result[0].total) if result else 0
+    # Frappe v16 no longer accepts SQL functions such as ``count(name)`` as
+    # strings, while older releases do not consistently support v16's dict
+    # aggregate syntax. Counting permission-filtered name pages uses the stable
+    # get_list API shared by supported Frappe releases and avoids raw SQL.
+    total = 0
+    start = 0
+    while True:
+        rows = frappe.get_list(
+            doctype,
+            fields=["name"],
+            filters=filters,
+            or_filters=or_filters or [],
+            order_by="name",
+            start=start,
+            page_length=COUNT_PAGE_LENGTH,
+        )
+        page_count = len(rows)
+        total += page_count
+        if page_count < COUNT_PAGE_LENGTH:
+            return total
+        start += page_count
 
 
 def _dashboard_kpi(key, label, route_key, filters):
