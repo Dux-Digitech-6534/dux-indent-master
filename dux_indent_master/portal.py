@@ -74,6 +74,16 @@ def _column(label, *fieldnames):
     return {"label": label, "fieldnames": fieldnames}
 
 
+def _has_portal_display_value(value):
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return True
+
+
 DOCUMENT_CONFIG = {
     "material_request": {
         "label": "Material Request",
@@ -150,7 +160,6 @@ DOCUMENT_CONFIG = {
                 "label": "Items",
                 "fields": [
                     _column("Item", "item_code"),
-                    _column("Item Name", "item_name"),
                     _column("Quantity", "qty"),
                     _column("UOM", "uom"),
                     _column("Rate", "rate"),
@@ -639,7 +648,7 @@ FORM_CONFIG = {
             {"label": "Currency & Terms", "fields": ["currency", "conversion_rate", "buying_price_list", "tc_name", "terms"]},
         ],
         "tables": [
-            {"fieldname": "items", "fields": ["item_code", "item_name", "schedule_date", "qty", "uom", "conversion_factor", "rate", "description", "material_request", "material_request_item"]},
+            {"fieldname": "items", "fields": ["item_code", "schedule_date", "qty", "uom", "conversion_factor", "rate", "description"]},
         ],
     },
     "purchase_receipt": {
@@ -1222,7 +1231,9 @@ def get_document_detail(route_key, name):
 
     fields = []
     for column in _resolve_columns(meta, config.get("detail_fields") or config["columns"]):
-        fields.append({**column, "value": doc.get(column["fieldname"])})
+        value = doc.get(column["fieldname"])
+        if _has_portal_display_value(value):
+            fields.append({**column, "value": value})
 
     child_tables = []
     for table_config in config.get("child_tables") or []:
@@ -1237,6 +1248,15 @@ def get_document_detail(route_key, name):
             child_rows.append(
                 {column["fieldname"]: row.get(column["fieldname"]) for column in child_columns}
             )
+
+        child_columns = [
+            column
+            for column in child_columns
+            if any(
+                _has_portal_display_value(row.get(column["fieldname"]))
+                for row in child_rows
+            )
+        ]
 
         child_tables.append(
             {
@@ -1265,6 +1285,11 @@ def get_document_detail(route_key, name):
         "child_tables": child_tables,
         "can_write": can_write,
         "can_edit": bool(doc.docstatus == 0 and can_write),
+        "can_submit": bool(
+            doc.docstatus == 0
+            and meta.is_submittable
+            and frappe.has_permission(doctype, ptype="submit", doc=doc)
+        ),
         "can_update_after_submit": can_update_after_submit,
         "can_create": bool(
             config.get("allow_create", True) and frappe.has_permission(doctype, ptype="create")

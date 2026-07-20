@@ -157,6 +157,9 @@ class DuxProcurementPortal {
 			if (action === "remove-form-row") this.remove_form_row($target.data("table"), Number($target.data("index")));
 			if (action === "save-form") this.save_portal_form(false);
 			if (action === "submit-form") this.confirm_submit_form();
+			if (action === "submit-detail") this.confirm_submit_detail(
+				$target.data("key"), $target.data("name")
+			);
 			if (action === "open-native") this.open_native_document($target.data("doctype"), $target.data("name"));
 			if (action === "previous") this.change_page(-1);
 			if (action === "next") this.change_page(1);
@@ -457,13 +460,16 @@ class DuxProcurementPortal {
 				data-lifecycle-action="${this.escape(action.action)}" data-requires-reason="${action.requires_reason ? "1" : ""}">
 				${action.action === "cancel" ? this.icon("trash", 14) : this.icon("refresh", 14)}${this.escape(action.label)}</button>`;
 		}).join("");
-		const form_label = data.can_edit ? __("Edit in Portal")
+		const form_label = data.can_edit ? __("Edit")
 			: data.can_update_after_submit ? __("Update in Portal") : __("View Form");
 		const hide_submitted_form_button = data.docstatus === 1
 			&& ["material_request", "purchase_order"].includes(data.key);
 		const form_button = hide_submitted_form_button ? "" : `<button class="duxp-btn ${data.can_edit || data.can_update_after_submit ? "duxp-btn-primary" : "duxp-btn-secondary"}"
 			data-action="edit-form" data-key="${this.escape(data.key)}" data-name="${this.escape(data.name)}">
 			${this.icon("edit", 14)}${form_label}</button>`;
+		const submit_button = data.can_submit ? `<button class="duxp-btn duxp-btn-primary" data-action="submit-detail"
+			data-key="${this.escape(data.key)}" data-name="${this.escape(data.name)}">
+			${this.icon("check", 14)}${__("Save & Submit")}</button>` : "";
 		const activity = this.render_activity_panel(data.activity || {}, data);
 
 		this.$content.html(`
@@ -473,6 +479,7 @@ class DuxProcurementPortal {
 					<button class="duxp-btn duxp-btn-secondary" data-action="back-list" data-key="${this.escape(data.key)}">${this.icon("back", 14)}${__("Back to List")}</button>
 					${create_actions}
 					${lifecycle_actions}
+					${submit_button}
 					${form_button}
 				</div>
 			</section>
@@ -1253,7 +1260,7 @@ class DuxProcurementPortal {
 				await this.open_document_detail(this.form_data.key, result.name);
 			} else {
 				frappe.show_alert({ message: `${result.name} ${__("saved")}`, indicator: "green" });
-				await this.open_document_form(this.form_data.key, result.name);
+				await this.open_document_detail(this.form_data.key, result.name);
 			}
 		} catch (error) {
 			const message = error && (error.message || error.exc) ? error.message || error.exc : __("Unable to save document.");
@@ -1267,6 +1274,31 @@ class DuxProcurementPortal {
 	confirm_submit_form() {
 		if (!this.form_data || !this.form_data.can_submit) return;
 		frappe.confirm(__("Save the latest changes and submit this document?"), () => this.save_portal_form(true));
+	}
+
+	confirm_submit_detail(key, name) {
+		if (!key || !name || this.detail_submitting) return;
+		frappe.confirm(__("Submit this saved draft document?"), () => this.submit_document_from_detail(key, name));
+	}
+
+	async submit_document_from_detail(key, name) {
+		if (this.detail_submitting) return;
+		this.detail_submitting = true;
+		this.$content.find('[data-action="submit-detail"]').prop("disabled", true);
+		try {
+			await this.call("dux_indent_master.portal.submit_portal_document", {
+				route_key: key,
+				name,
+			});
+			frappe.show_alert({ message: `${name} ${__("submitted")}`, indicator: "green" });
+			await this.open_document_detail(key, name);
+		} catch (error) {
+			const message = error && (error.message || error.exc) ? error.message || error.exc : __("Unable to submit document.");
+			frappe.msgprint({ title: __("Submit Failed"), message: this.escape(message), indicator: "red" });
+			this.$content.find('[data-action="submit-detail"]').prop("disabled", false);
+		} finally {
+			this.detail_submitting = false;
+		}
 	}
 
 	recent_table(rows) {
