@@ -1263,6 +1263,13 @@ class DuxProcurementPortal {
 			label: in_table ? "" : field.label,
 			read_only: field.read_only || !this.form_data.can_save ? 1 : 0,
 		};
+		if (["Link", "Dynamic Link"].includes(df.fieldtype)) {
+			// This form has no frm/docname context, so ControlLink's async
+			// validate_link_and_fetch round-trip has nothing to validate against and
+			// resolves empty, silently blanking out values we already know are valid
+			// (server-supplied defaults, mapped-document values, saved doc values).
+			df.ignore_link_validation = true;
+		}
 		if (df.fieldtype === "Dynamic Link") {
 			df.get_options = () => {
 				const option_control = this.form_controls[df.options];
