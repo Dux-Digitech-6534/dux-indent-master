@@ -1400,6 +1400,9 @@ class DuxProcurementPortal {
 				item_name_control.set_value(value);
 			}
 		}
+		if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "supplier" && value) {
+			await this.fetch_supplier_party_details(value);
+		}
 		if (this.form_data && ["transaction_date", "schedule_date", "required_date"].includes(fieldname)) {
 			const transaction_date = this.form_controls.transaction_date
 				? this.form_controls.transaction_date.get_value()
@@ -1441,6 +1444,33 @@ class DuxProcurementPortal {
 			});
 		}
 		this.refresh_form_dependencies();
+	}
+
+	async fetch_supplier_party_details(supplier) {
+		let details;
+		try {
+			details = await this.call("erpnext.accounts.party.get_party_details", {
+				party: supplier,
+				party_type: "Supplier",
+				company: this.form_company_value() || undefined,
+				doctype: "Purchase Order",
+			});
+		} catch (error) {
+			return;
+		}
+		if (!details) return;
+		[
+			"supplier_address", "address_display",
+			"billing_address", "billing_address_display",
+			"dispatch_address", "dispatch_address_display",
+			"contact_person", "contact_display", "contact_mobile", "contact_email",
+			"place_of_supply",
+		].forEach((fieldname) => {
+			const control = this.form_controls[fieldname];
+			if (control && details[fieldname] !== undefined && details[fieldname] !== null) {
+				control.set_value(details[fieldname]);
+			}
+		});
 	}
 
 	refresh_indent_attachment_preview(fieldname) {
@@ -1510,6 +1540,9 @@ class DuxProcurementPortal {
 		} else if (field.options === "Warehouse") {
 			await this.refresh_row_stock(table_fieldname, row_index);
 		}
+		if (["qty", "rate"].includes(field.fieldname)) {
+			this.recalculate_row_amount(table_fieldname, row_index);
+		}
 		if (
 			this.form_data && this.form_data.key === "dux_indent_master"
 			&& table_fieldname === "items"
@@ -1518,6 +1551,14 @@ class DuxProcurementPortal {
 			this.refresh_indent_row_balance(table_fieldname, row_index, field.fieldname !== "item_code");
 		}
 		this.refresh_form_dependencies();
+	}
+
+	recalculate_row_amount(table_fieldname, row_index) {
+		const controls = (this.table_controls[table_fieldname] || [])[row_index] || {};
+		if (!controls.amount) return;
+		const qty = Number(controls.qty ? controls.qty.get_value() : 0) || 0;
+		const rate = Number(controls.rate ? controls.rate.get_value() : 0) || 0;
+		controls.amount.set_value(flt(qty * rate, 2));
 	}
 
 	header_warehouse_value() {
@@ -1558,6 +1599,7 @@ class DuxProcurementPortal {
 				}
 			});
 			if (is_indent_item) this.refresh_indent_row_balance(table_fieldname, row_index);
+			this.recalculate_row_amount(table_fieldname, row_index);
 		} catch (error) {
 			// The save controller will still validate and enrich the row server-side.
 		}
