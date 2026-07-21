@@ -1522,51 +1522,70 @@ class DuxProcurementPortal {
 	}
 
 	async apply_purchase_order_tax_template(template) {
-		const table = (this.form_data.tables || []).find((item) => item.fieldname === "taxes");
-		if (!table) return;
-		let rows = [];
-		if (template) {
-			try {
-				rows = (await this.call("erpnext.controllers.accounts_controller.get_taxes_and_charges", {
-					master_doctype: "Purchase Taxes and Charges Template",
-					master_name: template,
-				})) || [];
-			} catch (error) {
-				rows = [];
+		if (this.po_tax_template_inflight === template) return;
+		this.po_tax_template_inflight = template;
+		try {
+			const table = (this.form_data.tables || []).find((item) => item.fieldname === "taxes");
+			if (!table) return;
+			let rows = [];
+			if (template) {
+				try {
+					rows = (await this.call("erpnext.controllers.accounts_controller.get_taxes_and_charges", {
+						master_doctype: "Purchase Taxes and Charges Template",
+						master_name: template,
+					})) || [];
+				} catch (error) {
+					rows = [];
+				}
 			}
+			this.sync_form_data_from_controls();
+			table.rows = rows;
+			this.render_document_form(this.form_data);
+			await this.recalculate_purchase_order_totals();
+		} finally {
+			this.po_tax_template_inflight = null;
 		}
-		this.sync_form_data_from_controls();
-		table.rows = rows;
-		this.render_document_form(this.form_data);
-		await this.recalculate_purchase_order_totals();
 	}
 
 	async recalculate_purchase_order_totals() {
 		if (!this.form_data || this.form_data.key !== "purchase_order") return;
-		this.sync_form_data_from_controls();
-		const values = this.collect_form_values();
-		let result;
-		try {
-			result = await this.call("dux_indent_master.portal.compute_purchase_order_totals", {
-				values: JSON.stringify(values),
-			});
-		} catch (error) {
+		if (this.po_totals_inflight) {
+			this.po_totals_pending = true;
 			return;
 		}
-		if (!result) return;
-		(this.table_controls.items || []).forEach((controls, index) => {
-			const row = (result.items || [])[index];
-			if (controls.amount && row && row.amount !== undefined) controls.amount.set_value(flt(row.amount, 2));
-		});
-		(this.table_controls.taxes || []).forEach((controls, index) => {
-			const row = (result.taxes || [])[index];
-			if (controls.tax_amount && row && row.tax_amount !== undefined) controls.tax_amount.set_value(flt(row.tax_amount, 2));
-		});
-		const totals = result.totals || {};
-		["grand_total", "rounding_adjustment", "rounded_total"].forEach((fieldname) => {
-			const control = this.form_controls[fieldname];
-			if (control && totals[fieldname] !== undefined) control.set_value(flt(totals[fieldname], 2));
-		});
+		this.po_totals_inflight = true;
+		try {
+			this.sync_form_data_from_controls();
+			const values = this.collect_form_values();
+			let result;
+			try {
+				result = await this.call("dux_indent_master.portal.compute_purchase_order_totals", {
+					values: JSON.stringify(values),
+				});
+			} catch (error) {
+				return;
+			}
+			if (!result || !this.form_data || this.form_data.key !== "purchase_order") return;
+			(this.table_controls.items || []).forEach((controls, index) => {
+				const row = (result.items || [])[index];
+				if (controls.amount && row && row.amount !== undefined) controls.amount.set_value(flt(row.amount, 2));
+			});
+			(this.table_controls.taxes || []).forEach((controls, index) => {
+				const row = (result.taxes || [])[index];
+				if (controls.tax_amount && row && row.tax_amount !== undefined) controls.tax_amount.set_value(flt(row.tax_amount, 2));
+			});
+			const totals = result.totals || {};
+			["grand_total", "rounding_adjustment", "rounded_total"].forEach((fieldname) => {
+				const control = this.form_controls[fieldname];
+				if (control && totals[fieldname] !== undefined) control.set_value(flt(totals[fieldname], 2));
+			});
+		} finally {
+			this.po_totals_inflight = false;
+			if (this.po_totals_pending) {
+				this.po_totals_pending = false;
+				this.recalculate_purchase_order_totals();
+			}
+		}
 	}
 
 	refresh_indent_attachment_preview(fieldname) {
