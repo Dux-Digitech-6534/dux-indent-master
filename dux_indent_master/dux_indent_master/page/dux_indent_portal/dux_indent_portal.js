@@ -1394,6 +1394,12 @@ class DuxProcurementPortal {
 			await this.open_delivery_challan_receipt(value);
 			return;
 		}
+		if (this.form_data && this.form_data.key === "item" && fieldname === "item_code" && value) {
+			const item_name_control = this.form_controls.item_name;
+			if (item_name_control && !item_name_control.get_value()) {
+				item_name_control.set_value(value);
+			}
+		}
 		if (this.form_data && ["transaction_date", "schedule_date", "required_date"].includes(fieldname)) {
 			const transaction_date = this.form_controls.transaction_date
 				? this.form_controls.transaction_date.get_value()

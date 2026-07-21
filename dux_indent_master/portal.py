@@ -630,6 +630,7 @@ FORM_CONFIG = {
                 "field_overrides": {
                     "schedule_date": {"min_date_field": "transaction_date"},
                     "custom_dux_indent_remark": {"label": "Remark", "force_editable": True},
+                    "set_warehouse": {"label": "Set Warehouse"},
                 },
             },
             {
@@ -650,9 +651,8 @@ FORM_CONFIG = {
             {
                 "fieldname": "items",
                 "fields": [
-                    "item_code", "schedule_date", "qty", "uom", "stock_uom",
-                    "from_warehouse", "rate", "amount", "expense_account",
-                    "project", "cost_center", "custom_dux_indent_specification", "description",
+                    "item_code", "schedule_date", "qty", "uom",
+                    "from_warehouse", "custom_dux_indent_specification", "description",
                 ],
                 "field_overrides": {
                     "schedule_date": {"label": "Required Date", "force_read_only": True},
