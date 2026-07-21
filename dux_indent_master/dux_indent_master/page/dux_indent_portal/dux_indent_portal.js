@@ -144,9 +144,16 @@ class DuxProcurementPortal {
 			if (action === "new") this.open_document_form($target.data("key"));
 			if (action === "back-list") this.open_document_list($target.data("key"));
 			if (action === "edit-form") this.open_document_form($target.data("key"), $target.data("name"));
-			if (action === "create-mapped-document") this.open_mapped_document_form(
-				$target.data("target-key"), $target.data("source-key"), $target.data("source-name")
-			);
+			if (action === "toggle-create-menu") {
+				event.stopPropagation();
+				this.toggle_dropdown($target.closest(".duxp-dropdown"));
+			}
+			if (action === "create-mapped-document") {
+				this.$root.find(".duxp-dropdown.is-open").removeClass("is-open");
+				this.open_mapped_document_form(
+					$target.data("target-key"), $target.data("source-key"), $target.data("source-name")
+				);
+			}
 			if (action === "get-items-from") this.select_mapping_source(
 				$target.data("target-key"), $target.data("source-key")
 			);
@@ -250,6 +257,11 @@ class DuxProcurementPortal {
 		this.$root.find(".duxp-scroll").on("scroll", () => this.reposition_active_suggestions());
 		$(window).off("resize.duxProcurementPortal").on("resize.duxProcurementPortal", () => {
 			this.reposition_active_suggestions();
+		});
+		$(document).off("click.duxCreateMenu").on("click.duxCreateMenu", (event) => {
+			if (!$(event.target).closest(".duxp-dropdown").length) {
+				this.$root.find(".duxp-dropdown.is-open").removeClass("is-open");
+			}
 		});
 	}
 
@@ -475,11 +487,19 @@ class DuxProcurementPortal {
 			</section>
 		`; }).join("");
 
-		const create_actions = (data.create_actions || []).map((action, index) => `
-			<button class="duxp-btn ${index === 0 ? "duxp-btn-primary" : "duxp-btn-secondary"}" data-action="create-mapped-document"
+		const create_menu_items = (data.create_actions || []).map((action) => `
+			<button class="duxp-menu-item" data-action="create-mapped-document"
 				data-target-key="${this.escape(action.target_route_key)}" data-source-key="${this.escape(action.source_route_key)}"
-				data-source-name="${this.escape(data.name)}">${this.icon("plus", 14)}${__("Create")} ${this.escape(action.label)}</button>
+				data-source-name="${this.escape(data.name)}">${this.escape(action.label)}</button>
 		`).join("");
+		const create_actions = create_menu_items ? `
+			<div class="duxp-dropdown" data-role="create-dropdown">
+				<button class="duxp-btn duxp-btn-primary" data-action="toggle-create-menu" aria-haspopup="true" aria-expanded="false">
+					${this.icon("plus", 14)}${__("Create")}${this.icon("down", 12)}
+				</button>
+				<div class="duxp-dropdown-menu">${create_menu_items}</div>
+			</div>
+		` : "";
 		const lifecycle_actions = (data.lifecycle_actions || []).map((action) => {
 			if (action.action === "amend") {
 				return `<button class="duxp-btn duxp-btn-primary" data-action="amend-document" data-key="${this.escape(data.key)}"
@@ -691,6 +711,13 @@ class DuxProcurementPortal {
 		} catch (error) {
 			return String(value);
 		}
+	}
+
+	toggle_dropdown($dropdown) {
+		if (!$dropdown || !$dropdown.length) return;
+		const was_open = $dropdown.hasClass("is-open");
+		this.$root.find(".duxp-dropdown.is-open").removeClass("is-open");
+		if (!was_open) $dropdown.addClass("is-open");
 	}
 
 	toggle_activity_panel() {

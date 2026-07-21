@@ -681,13 +681,15 @@ FORM_CONFIG = {
     "purchase_receipt": {
         "sections": [
             {"label": "Supplier & Posting", "fields": ["naming_series", "supplier", "supplier_delivery_note", "purchase_order", "posting_date", "posting_time", "set_posting_time", "company", "set_warehouse", "rejected_warehouse", "is_return"]},
-            {"label": "Discount", "position": "after_tables", "fields": ["apply_discount_on", "additional_discount_percentage", "discount_amount"]},
             {"label": "Supplier Address, Billing & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "billing_address", "billing_address_display", "contact_person", "contact_display", "contact_mobile", "contact_email", "place_of_supply"]},
             {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display"]},
         ],
         "tables": [
-            {"fieldname": "items", "fields": ["item_code", "received_qty", "qty", "rejected_qty", "uom", "conversion_factor", "rate", "description"]},
-            {"fieldname": "taxes", "fields": ["category", "add_deduct_tax", "charge_type", "account_head", "description", "rate", "tax_amount"]},
+            {
+                "fieldname": "items",
+                "fields": ["item_code", "qty", "uom", "rate", "amount"],
+                "field_overrides": {"amount": {"force_read_only": True}},
+            },
         ],
     },
     "purchase_invoice": {

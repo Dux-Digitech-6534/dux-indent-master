@@ -623,6 +623,50 @@ body.dux-portal-active .duxp-root {
 	gap: 9px;
 }
 
+.duxp-dropdown {
+	position: relative;
+	display: inline-flex;
+}
+
+.duxp-dropdown-menu {
+	position: absolute;
+	top: calc(100% + 6px);
+	right: 0;
+	z-index: 20;
+	display: none;
+	flex-direction: column;
+	min-width: 200px;
+	padding: 6px;
+	border: 1px solid var(--duxp-border-strong);
+	border-radius: 10px;
+	background: var(--duxp-surface);
+	box-shadow: var(--duxp-shadow-pop);
+}
+
+.duxp-dropdown.is-open .duxp-dropdown-menu {
+	display: flex;
+}
+
+.duxp-menu-item {
+	display: flex;
+	align-items: center;
+	padding: 8px 10px;
+	border: none;
+	border-radius: 7px;
+	background: transparent;
+	color: var(--duxp-text);
+	font-size: 13px;
+	font-weight: 500;
+	text-align: left;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.duxp-menu-item:hover {
+	background: var(--duxp-surface-3);
+	color: var(--duxp-iris);
+}
+
 .duxp-btn {
 	height: 36px;
 	display: inline-flex;
