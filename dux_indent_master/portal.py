@@ -125,6 +125,7 @@ DOCUMENT_CONFIG = {
                     _column("Required Date", "schedule_date"),
                     _column("Specification", "custom_dux_indent_specification", "description"),
                 ],
+                "show_hidden": ["warehouse"],
             }
         ],
         "date_field": "transaction_date",
@@ -1634,7 +1635,9 @@ def get_document_detail(route_key, name):
             continue
 
         child_meta = frappe.get_meta(table_field.options)
-        child_columns = _resolve_columns(child_meta, table_config["fields"])
+        child_columns = _resolve_columns(
+            child_meta, table_config["fields"], allow_hidden=set(table_config.get("show_hidden") or [])
+        )
         child_rows = []
         for row in doc.get(table_config["fieldname"]) or []:
             child_rows.append(
@@ -2772,7 +2775,8 @@ def _apply_portal_row_warehouses(doc, row):
             )
 
 
-def _resolve_columns(meta, requested_columns):
+def _resolve_columns(meta, requested_columns, allow_hidden=None):
+    allow_hidden = allow_hidden or set()
     columns = []
     selected = set()
     for requested in requested_columns:
@@ -2784,6 +2788,7 @@ def _resolve_columns(meta, requested_columns):
                 and _field_exists(meta, candidate)
                 and (
                     candidate in SYSTEM_FIELDS
+                    or candidate in allow_hidden
                     or not meta.get_field(candidate).hidden
                 )
             ),
