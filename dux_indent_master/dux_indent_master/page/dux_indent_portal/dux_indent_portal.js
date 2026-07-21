@@ -164,9 +164,12 @@ class DuxProcurementPortal {
 			if (action === "run-workflow") this.run_workflow_action(
 				$target.data("key"), $target.data("name"), $target.data("workflow-action")
 			);
-			if (action === "run-operational") this.run_operational_action(
-				$target.data("key"), $target.data("name"), $target.data("operational-action")
-			);
+			if (action === "run-operational") {
+				this.$root.find(".duxp-dropdown.is-open").removeClass("is-open");
+				this.run_operational_action(
+					$target.data("key"), $target.data("name"), $target.data("operational-action")
+				);
+			}
 			if (action === "get-payment-outstanding") this.get_payment_outstanding($target.data("mode"));
 			if (action === "amend-document") this.open_amended_document_form(
 				$target.data("key"), $target.data("name")
@@ -487,11 +490,21 @@ class DuxProcurementPortal {
 			</section>
 		`; }).join("");
 
-		const create_menu_items = (data.create_actions || []).map((action) => `
-			<button class="duxp-menu-item" data-action="create-mapped-document"
-				data-target-key="${this.escape(action.target_route_key)}" data-source-key="${this.escape(action.source_route_key)}"
-				data-source-name="${this.escape(data.name)}">${this.escape(action.label)}</button>
-		`).join("");
+		const DROPDOWN_OPERATIONAL_ACTIONS = ["indent_material_purchase", "indent_delivery_challan"];
+		const dropdown_operational_actions = (data.operational_actions || [])
+			.filter((action) => DROPDOWN_OPERATIONAL_ACTIONS.includes(action.action));
+		const create_menu_items = [
+			...(data.create_actions || []).map((action) => `
+				<button class="duxp-menu-item" data-action="create-mapped-document"
+					data-target-key="${this.escape(action.target_route_key)}" data-source-key="${this.escape(action.source_route_key)}"
+					data-source-name="${this.escape(data.name)}">${this.escape(action.label)}</button>
+			`),
+			...dropdown_operational_actions.map((action) => `
+				<button class="duxp-menu-item" data-action="run-operational"
+					data-key="${this.escape(data.key)}" data-name="${this.escape(data.name)}"
+					data-operational-action="${this.escape(action.action)}">${this.escape(action.label)}</button>
+			`),
+		].join("");
 		const create_actions = create_menu_items ? `
 			<div class="duxp-dropdown" data-role="create-dropdown">
 				<button class="duxp-btn duxp-btn-primary" data-action="toggle-create-menu" aria-haspopup="true" aria-expanded="false">
@@ -516,17 +529,19 @@ class DuxProcurementPortal {
 				data-workflow-action="${this.escape(action.action)}">
 				${this.icon(action.action === "Reject" ? "warning" : "check", 14)}${this.escape(action.label)}</button>
 		`).join("");
-		const operational_actions = (data.operational_actions || []).map((action) => `
+		const operational_actions = (data.operational_actions || [])
+			.filter((action) => !DROPDOWN_OPERATIONAL_ACTIONS.includes(action.action))
+			.map((action) => `
 			<button class="duxp-btn duxp-btn-${this.escape(action.style || "secondary")}" data-action="run-operational"
 				data-key="${this.escape(data.key)}" data-name="${this.escape(data.name)}"
 				data-operational-action="${this.escape(action.action)}" ${action.action === "indent_view_stock" ? "hidden" : ""}>
 				${this.icon(action.style === "primary" ? "plus" : "workflow", 14)}${this.escape(action.label)}</button>
 		`).join("");
-		const form_label = data.can_edit ? __("Edit")
-			: data.can_update_after_submit ? __("Update in Portal") : __("View Form");
-		const hide_submitted_form_button = data.docstatus === 1
-			&& ["material_request", "purchase_order"].includes(data.key);
-		const form_button = hide_submitted_form_button ? "" : `<button class="duxp-btn ${data.can_edit || data.can_update_after_submit ? "duxp-btn-primary" : "duxp-btn-secondary"}"
+		const form_label = data.can_edit ? __("Edit") : __("View Form");
+		const hide_submitted_form_button = (data.docstatus === 1
+			&& ["material_request", "purchase_order"].includes(data.key))
+			|| (!data.can_edit && data.can_update_after_submit);
+		const form_button = hide_submitted_form_button ? "" : `<button class="duxp-btn ${data.can_edit ? "duxp-btn-primary" : "duxp-btn-secondary"}"
 			data-action="edit-form" data-key="${this.escape(data.key)}" data-name="${this.escape(data.name)}">
 			${this.icon("edit", 14)}${form_label}</button>`;
 		const submit_button = data.can_submit ? `<button class="duxp-btn duxp-btn-primary" data-action="submit-detail"
