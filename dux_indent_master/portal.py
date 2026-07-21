@@ -695,21 +695,11 @@ FORM_CONFIG = {
     "purchase_invoice": {
         "sections": [
             {"label": "Supplier & Posting", "fields": ["naming_series", "supplier", "posting_date", "posting_time", "set_posting_time", "due_date", "company", "bill_no", "bill_date", "cost_center", "project"]},
-            {"label": "Payment & Currency", "fields": ["currency", "conversion_rate", "is_paid", "apply_tds", "tax_withholding_group", "mode_of_payment", "credit_to", "cash_bank_account", "paid_amount"]},
-            {"label": "Stock & Warehouse", "fields": ["update_stock", "set_warehouse", "rejected_warehouse"]},
-            {"label": "Discount", "fields": ["apply_discount_on", "additional_discount_percentage", "discount_amount"]},
-            {"label": "Write Off", "fields": ["write_off_amount", "write_off_account", "write_off_cost_center"]},
             {"label": "Supplier Address, Billing & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "billing_address", "billing_address_display", "contact_person", "contact_display", "contact_mobile", "contact_email", "place_of_supply"]},
             {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display"]},
-            {"label": "Transport", "fields": ["transporter", "gst_transporter_id", "mode_of_transport", "vehicle_no", "driver", "driver_name", "lr_no", "lr_date", "distance"]},
-            {"label": "Hold & Terms", "fields": ["on_hold", "release_date", "hold_comment", "payment_terms_template", "tc_name", "terms"]},
         ],
         "tables": [
             {"fieldname": "items", "fields": ["item_code", "item_name", "qty", "uom", "conversion_factor", "rate", "expense_account", "purchase_order", "purchase_receipt", "description"]},
-            {"fieldname": "taxes", "fields": ["category", "add_deduct_tax", "charge_type", "account_head", "description", "rate", "tax_amount"]},
-            {"fieldname": "tax_withholding_entries", "fields": ["tax_withholding_category", "taxable_amount", "withholding_amount"]},
-            {"fieldname": "advances", "fields": ["reference_type", "reference_name", "remarks", "advance_amount", "allocated_amount"]},
-            {"fieldname": "payment_schedule", "fields": ["payment_term", "description", "due_date", "invoice_portion", "payment_amount", "outstanding"]},
         ],
     },
     "stock_entry": {
