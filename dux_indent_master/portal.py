@@ -704,39 +704,27 @@ FORM_CONFIG = {
     },
     "stock_entry": {
         "sections": [
-            {"label": "Stock Movement", "fields": ["naming_series", "stock_entry_type", "company", "posting_date", "posting_time", "set_posting_time", "from_warehouse", "to_warehouse", "is_opening"]},
-            {"label": "Manufacturing", "fields": ["work_order", "from_bom", "use_multi_level_bom", "bom_no", "fg_completed_qty", "process_loss_percentage", "process_loss_qty"]},
-            {"label": "Supplier & GST", "fields": ["supplier", "supplier_address", "bill_from_address", "bill_to_address", "place_of_supply", "tax_category", "taxes_and_charges"]},
-            {"label": "Transport", "fields": ["transporter", "gst_transporter_id", "mode_of_transport", "vehicle_no", "lr_no", "lr_date", "distance"]},
-            {"label": "References", "fields": ["project", "purchase_order", "purchase_receipt_no", "delivery_note_no", "job_card", "remarks"]},
+            {"label": "Stock Movement", "fields": ["naming_series", "stock_entry_type", "company", "posting_date", "posting_time", "set_posting_time"]},
+            {"label": "BOM Info", "fields": ["from_bom"]},
+            {"label": "Default Warehouse", "fields": ["from_warehouse", "to_warehouse"]},
         ],
         "tables": [
-            {"fieldname": "items", "fields": ["item_code", "item_name", "qty", "uom", "conversion_factor", "basic_rate", "expense_account", "cost_center", "description"]},
-            {"fieldname": "taxes", "fields": ["charge_type", "account_head", "rate", "gst_tax_type", "tax_amount"]},
-            {"fieldname": "additional_costs", "fields": ["expense_account", "description", "amount", "base_amount"]},
-            {"fieldname": "doc_references", "fields": ["link_doctype", "link_name"]},
+            {"fieldname": "items", "fields": ["s_warehouse", "item_code", "qty", "basic_rate", "item_tax_template"]},
         ],
     },
     "payment_entry": {
         "sections": [
             {"label": "Payment Details", "fields": ["naming_series", "payment_type", "posting_date", "company", "mode_of_payment", "party_type", "party", "party_name", "apply_tds", "tax_withholding_category", "tax_withholding_group"]},
             {"label": "Accounts & Amount", "fields": ["paid_from", "paid_to", "paid_amount", "received_amount", "source_exchange_rate", "target_exchange_rate", "unallocated_amount", "difference_amount"]},
-            {"label": "Bank Accounts", "fields": ["bank_account", "party_bank_account", "bank", "bank_account_no", "clearance_date"]},
-            {"label": "Address & Accounting", "fields": ["company_address", "customer_address", "place_of_supply", "cost_center", "project"]},
+            {"label": "Bank Accounts", "fields": ["bank_account", "party_bank_account", "bank", "bank_account_no"]},
+            {"label": "Address & Accounting", "fields": ["company_address", "cost_center", "project"]},
             {"label": "Reference", "fields": ["reference_no", "reference_date", "remarks"]},
         ],
         "tables": [
             {
                 "fieldname": "references",
-                "fields": [
-                    "reference_doctype", "reference_name", "due_date", "bill_no", "payment_term",
-                    "payment_term_outstanding", "total_amount", "outstanding_amount",
-                    "allocated_amount", "exchange_rate", "account",
-                ],
+                "fields": ["reference_doctype", "reference_name", "due_date", "total_amount", "outstanding_amount", "allocated_amount"],
             },
-            {"fieldname": "taxes", "fields": ["charge_type", "account_head", "description", "rate", "tax_amount"]},
-            {"fieldname": "deductions", "fields": ["account", "cost_center", "amount"]},
-            {"fieldname": "tax_withholding_entries", "fields": ["tax_withholding_category", "taxable_amount", "withholding_amount"]},
         ],
     },
     "delivery_challan": {
