@@ -664,7 +664,14 @@ FORM_CONFIG = {
     },
     "purchase_order": {
         "sections": [
-            {"label": "Supplier & Schedule", "fields": ["naming_series", "supplier", "transaction_date", "schedule_date", "company", "supplier_warehouse", "set_warehouse", "custom_sap_po_no", "custom_sap_remarks"]},
+            {
+                "label": "Supplier & Schedule",
+                "fields": ["naming_series", "supplier", "transaction_date", "schedule_date", "company", "supplier_warehouse", "set_warehouse", "custom_sap_po_no", "custom_sap_remarks"],
+                "field_overrides": {
+                    "custom_sap_po_no": {"force_editable": True},
+                    "custom_sap_remarks": {"force_editable": True},
+                },
+            },
             {"label": "Taxes and Charges", "fields": ["taxes_and_charges"]},
             {"label": "Totals", "position": "after_tables", "fields": ["grand_total", "in_words", "rounding_adjustment", "rounded_total", "advance_paid"]},
             {"label": "Supplier Address, Billing & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "billing_address", "billing_address_display", "contact_person", "contact_display", "contact_mobile", "contact_email", "place_of_supply"]},
@@ -2269,6 +2276,76 @@ def get_portal_item_defaults(
         "warehouse": selected_warehouse,
         "source_warehouse": selected_warehouse,
         "stock_qty": stock_qty,
+    }
+
+
+@frappe.whitelist()
+def compute_purchase_order_totals(values):
+    """Live-calculate item amounts, tax rows, and totals for an unsaved Purchase Order
+    using ERPNext's own tax engine, so the portal's GST/discount math matches the native form."""
+    _require_authenticated_user()
+    _require_doctype_permission("Purchase Order", "create")
+    values = frappe.parse_json(values) if isinstance(values, str) else (values or {})
+
+    doc = frappe.new_doc("Purchase Order")
+    doc.company = values.get("company")
+    doc.transaction_date = values.get("transaction_date") or nowdate()
+    doc.currency = values.get("currency") or frappe.get_cached_value("Company", doc.company, "default_currency")
+    doc.conversion_rate = flt(values.get("conversion_rate")) or 1
+    doc.apply_discount_on = values.get("apply_discount_on") or "Grand Total"
+    doc.additional_discount_percentage = flt(values.get("additional_discount_percentage"))
+    doc.discount_amount = flt(values.get("discount_amount"))
+    doc.taxes_and_charges = values.get("taxes_and_charges")
+
+    doc.set("items", [])
+    for row in values.get("items") or []:
+        if not row.get("item_code") or not flt(row.get("qty")):
+            continue
+        doc.append(
+            "items",
+            {
+                "item_code": row.get("item_code"),
+                "qty": flt(row.get("qty")),
+                "rate": flt(row.get("rate")),
+                "uom": row.get("uom"),
+                "conversion_factor": flt(row.get("conversion_factor")) or 1,
+            },
+        )
+
+    doc.set("taxes", [])
+    for row in values.get("taxes") or []:
+        if not row.get("charge_type") or not row.get("account_head"):
+            continue
+        doc.append(
+            "taxes",
+            {
+                "charge_type": row.get("charge_type"),
+                "account_head": row.get("account_head"),
+                "description": row.get("description") or row.get("account_head"),
+                "rate": flt(row.get("rate")),
+                "category": row.get("category") or "Total",
+                "add_deduct_tax": row.get("add_deduct_tax") or "Add",
+            },
+        )
+
+    if not doc.get("items"):
+        return {"items": [], "taxes": [], "totals": {}}
+
+    try:
+        doc.calculate_taxes_and_totals()
+    except Exception:
+        frappe.clear_last_message()
+        frappe.log_error(title="Portal PO totals calculation failed")
+        return {"items": [], "taxes": [], "totals": {}}
+
+    return {
+        "items": [{"amount": flt(row.amount)} for row in doc.get("items")],
+        "taxes": [{"tax_amount": flt(row.tax_amount)} for row in doc.get("taxes")],
+        "totals": {
+            "grand_total": flt(doc.grand_total),
+            "rounding_adjustment": flt(doc.rounding_adjustment),
+            "rounded_total": flt(doc.rounded_total),
+        },
     }
 
 

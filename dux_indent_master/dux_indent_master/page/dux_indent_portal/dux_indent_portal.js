@@ -1443,6 +1443,14 @@ class DuxProcurementPortal {
 		if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "supplier" && value) {
 			await this.fetch_supplier_party_details(value);
 		}
+		if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "taxes_and_charges") {
+			await this.apply_purchase_order_tax_template(value);
+		} else if (
+			this.form_data && this.form_data.key === "purchase_order"
+			&& ["apply_discount_on", "additional_discount_percentage", "discount_amount", "conversion_rate"].includes(fieldname)
+		) {
+			await this.recalculate_purchase_order_totals();
+		}
 		if (this.form_data && ["transaction_date", "schedule_date", "required_date"].includes(fieldname)) {
 			const transaction_date = this.form_controls.transaction_date
 				? this.form_controls.transaction_date.get_value()
@@ -1510,6 +1518,54 @@ class DuxProcurementPortal {
 			if (control && details[fieldname] !== undefined && details[fieldname] !== null) {
 				control.set_value(details[fieldname]);
 			}
+		});
+	}
+
+	async apply_purchase_order_tax_template(template) {
+		const table = (this.form_data.tables || []).find((item) => item.fieldname === "taxes");
+		if (!table) return;
+		let rows = [];
+		if (template) {
+			try {
+				rows = (await this.call("erpnext.controllers.accounts_controller.get_taxes_and_charges", {
+					master_doctype: "Purchase Taxes and Charges Template",
+					master_name: template,
+				})) || [];
+			} catch (error) {
+				rows = [];
+			}
+		}
+		this.sync_form_data_from_controls();
+		table.rows = rows;
+		this.render_document_form(this.form_data);
+		await this.recalculate_purchase_order_totals();
+	}
+
+	async recalculate_purchase_order_totals() {
+		if (!this.form_data || this.form_data.key !== "purchase_order") return;
+		this.sync_form_data_from_controls();
+		const values = this.collect_form_values();
+		let result;
+		try {
+			result = await this.call("dux_indent_master.portal.compute_purchase_order_totals", {
+				values: JSON.stringify(values),
+			});
+		} catch (error) {
+			return;
+		}
+		if (!result) return;
+		(this.table_controls.items || []).forEach((controls, index) => {
+			const row = (result.items || [])[index];
+			if (controls.amount && row && row.amount !== undefined) controls.amount.set_value(flt(row.amount, 2));
+		});
+		(this.table_controls.taxes || []).forEach((controls, index) => {
+			const row = (result.taxes || [])[index];
+			if (controls.tax_amount && row && row.tax_amount !== undefined) controls.tax_amount.set_value(flt(row.tax_amount, 2));
+		});
+		const totals = result.totals || {};
+		["grand_total", "rounding_adjustment", "rounded_total"].forEach((fieldname) => {
+			const control = this.form_controls[fieldname];
+			if (control && totals[fieldname] !== undefined) control.set_value(flt(totals[fieldname], 2));
 		});
 	}
 
@@ -1582,6 +1638,13 @@ class DuxProcurementPortal {
 		}
 		if (["qty", "rate"].includes(field.fieldname)) {
 			this.recalculate_row_amount(table_fieldname, row_index);
+		}
+		if (
+			this.form_data && this.form_data.key === "purchase_order"
+			&& ["items", "taxes"].includes(table_fieldname)
+			&& ["item_code", "qty", "rate", "charge_type", "account_head"].includes(field.fieldname)
+		) {
+			await this.recalculate_purchase_order_totals();
 		}
 		if (
 			this.form_data && this.form_data.key === "dux_indent_master"
@@ -1713,6 +1776,9 @@ class DuxProcurementPortal {
 		if (!table || row_index < 0 || row_index >= table.rows.length) return;
 		table.rows.splice(row_index, 1);
 		this.render_document_form(this.form_data);
+		if (this.form_data.key === "purchase_order" && ["items", "taxes"].includes(table_fieldname)) {
+			this.recalculate_purchase_order_totals();
+		}
 	}
 
 	close_document_form() {
