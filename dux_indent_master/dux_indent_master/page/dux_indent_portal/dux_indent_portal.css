@@ -758,12 +758,28 @@ body.dux-portal-active .duxp-root {
 	font-size: 12.5px;
 }
 
-.duxp-report-filter {
-	width: 220px;
+.duxp-report-filter-bar {
+	align-items: flex-start;
 }
 
-.duxp-report-filter .form-control,
-.duxp-report-filter input {
+.duxp-report-filter-item {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 170px;
+}
+
+.duxp-report-filter-label {
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--duxp-text-3);
+	text-transform: uppercase;
+	letter-spacing: 0.02em;
+}
+
+.duxp-report-filter-item .form-control,
+.duxp-report-filter-item input,
+.duxp-report-filter-item select {
 	height: 36px;
 	border-radius: 9px;
 	border: 1px solid var(--duxp-border-strong);
@@ -772,6 +788,11 @@ body.dux-portal-active .duxp-root {
 	font-size: 12.5px;
 	padding: 0 10px;
 	width: 100%;
+}
+
+.duxp-report-filter-item [type="checkbox"] {
+	width: auto;
+	height: auto;
 }
 
 .duxp-table-wrap {

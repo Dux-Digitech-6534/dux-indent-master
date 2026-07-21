@@ -355,63 +355,101 @@ class DuxProcurementPortal {
 		}
 	}
 
+	async load_report_filter_defs(report_name) {
+		if (frappe.query_reports[report_name] && frappe.query_reports[report_name].filters) {
+			return frappe.query_reports[report_name].filters;
+		}
+		try {
+			const response = await this.call("frappe.desk.query_report.get_script", { report_name });
+			if (response && response.script) frappe.dom.eval(response.script);
+		} catch (error) {
+			// Fall through with whatever (if anything) got registered.
+		}
+		return (frappe.query_reports[report_name] && frappe.query_reports[report_name].filters) || [];
+	}
+
 	async open_report_view(key, reset = true) {
 		const item = this.items[key];
 		if (!item) return;
-		if (reset) {
-			const today = frappe.datetime.get_today();
+		this.report_filter_defs = this.report_filter_defs || {};
+		this.state.report_values = this.state.report_values || {};
+		if (!this.report_filter_defs[item.report]) {
+			this.report_filter_defs[item.report] = await this.load_report_filter_defs(item.report);
+		}
+		const filter_defs = this.report_filter_defs[item.report] || [];
+		if (reset || !this.state.report_values[key]) {
+			const values = {};
+			filter_defs.forEach((filter) => {
+				if (!filter.fieldname) return;
+				values[filter.fieldname] = filter.default === undefined || filter.default === null ? "" : filter.default;
+			});
+			if (!values.company) values.company = this.bootstrap.company || "";
+			this.state.report_values[key] = values;
 			this.state.start = 0;
-			if (!this.state.report_company) this.state.report_company = this.bootstrap.company || "";
-			if (!this.state.report_date) this.state.report_date = today;
-			if (!this.state.report_from_date) this.state.report_from_date = frappe.datetime.add_days(today, -90);
-			if (!this.state.report_to_date) this.state.report_to_date = today;
 		}
 		this.state.route_key = key;
 		this.state.view = "report";
 		this.set_active(key, item.label);
 		this.show_loading();
-		const filters = item.filter_kind === "as_of"
-			? { company: this.state.report_company, report_date: this.state.report_date }
-			: { company: this.state.report_company, from_date: this.state.report_from_date, to_date: this.state.report_to_date };
 		try {
 			const data = await this.call("dux_indent_master.portal.get_portal_report", {
 				route_key: key,
-				filters: JSON.stringify(filters),
+				filters: JSON.stringify(this.state.report_values[key]),
 				start: this.state.start || 0,
 				page_length: this.bootstrap.page_length || 20,
 			});
 			this.current_list = data;
-			this.render_report_view(data, item);
+			this.render_report_view(data, filter_defs);
 		} catch (error) {
 			this.show_error(error);
 		}
 	}
 
 	run_report_filters() {
-		if (this.report_company_control) this.state.report_company = this.report_company_control.get_value();
-		const $date = this.$content.find('[data-role="report-date"]');
-		if ($date.length) this.state.report_date = $date.val();
-		const $from = this.$content.find('[data-role="report-from-date"]');
-		if ($from.length) this.state.report_from_date = $from.val();
-		const $to = this.$content.find('[data-role="report-to-date"]');
-		if ($to.length) this.state.report_to_date = $to.val();
+		const values = {};
+		Object.entries(this.report_filter_controls || {}).forEach(([fieldname, control]) => {
+			if (control) values[fieldname] = control.get_value();
+		});
+		this.state.report_values[this.state.route_key] = values;
 		this.state.start = 0;
 		this.open_report_view(this.state.route_key, false);
 	}
 
 	make_report_filter_control($slot, df, value) {
 		if (!$slot.length) return null;
-		const control = frappe.ui.form.make_control({
-			df: { ...df, ignore_link_validation: true },
-			parent: $slot,
-			render_input: true,
+		const safe_df = { ...df, ignore_link_validation: true };
+		["get_query", "get_data"].forEach((key) => {
+			const original = safe_df[key];
+			if (typeof original !== "function") return;
+			safe_df[key] = (...args) => {
+				try {
+					return original.apply(safe_df, args);
+				} catch (error) {
+					return {};
+				}
+			};
 		});
-		control.set_value(value || "");
-		return control;
+		delete safe_df.on_change;
+		delete safe_df.onchange;
+		try {
+			const control = frappe.ui.form.make_control({ df: safe_df, parent: $slot, render_input: true });
+			control.set_value(value === undefined || value === null ? "" : value);
+			return control;
+		} catch (error) {
+			return null;
+		}
 	}
 
-	render_report_view(data, item) {
-		const filter_kind = (item && item.filter_kind) || data.filter_kind || "date_range";
+	render_report_view(data, filter_defs) {
+		const SKIP_FIELDTYPES = ["Section Break", "Column Break", "Tab Break", "HTML", "Button"];
+		const visible_filters = (filter_defs || []).filter((f) => f.fieldname && !f.hidden && !SKIP_FIELDTYPES.includes(f.fieldtype));
+		const filter_items_html = visible_filters.map((f) => `
+			<div class="duxp-report-filter-item">
+				<span class="duxp-report-filter-label">${this.escape(f.label || f.fieldname)}</span>
+				<div class="duxp-form-control" data-report-fieldname="${this.escape(f.fieldname)}"></div>
+			</div>
+		`).join("");
+
 		const rows = (data.rows || []).map((row) => `
 			<tr>${(data.columns || []).map((column) => `<td>${this.format_value(row[column.fieldname], column, row)}</td>`).join("")}</tr>
 		`).join("");
@@ -419,35 +457,28 @@ class DuxProcurementPortal {
 		const end = Math.min(start + (data.rows || []).length, Number(data.total || 0));
 		const can_previous = start > 0;
 		const can_next = end < Number(data.total || 0);
-		const date_controls = filter_kind === "as_of" ? `
-			<label class="duxp-filter-select">${this.icon("calendar", 13)}<input type="date" data-role="report-date" value="${this.escape(this.state.report_date)}" title="${__("Report Date")}"></label>
-		` : `
-			<label class="duxp-filter-select">${this.icon("calendar", 13)}<input type="date" data-role="report-from-date" value="${this.escape(this.state.report_from_date)}" title="${__("From Date")}"></label>
-			<label class="duxp-filter-select">${this.icon("calendar", 13)}<input type="date" data-role="report-to-date" value="${this.escape(this.state.report_to_date)}" title="${__("To Date")}"></label>
-		`;
 
 		this.$content.html(`
 			<section class="duxp-page-head">
 				<div><h1>${this.escape(data.label)}</h1><p>${this.escape(data.description)}</p></div>
 			</section>
 			<section class="duxp-card">
-				<div class="duxp-filter-bar">
-					<div class="duxp-form-control duxp-report-filter" data-fieldname="report-company"></div>
-					${date_controls}
-					<button class="duxp-btn duxp-btn-secondary" data-action="run-report">${this.icon("refresh", 14)}${__("Apply")}</button>
+				<div class="duxp-filter-bar duxp-report-filter-bar">
+					${filter_items_html}
+					<button class="duxp-btn duxp-btn-primary" data-action="run-report">${this.icon("refresh", 14)}${__("Apply")}</button>
 				</div>
 				<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr>${(data.columns || []).map((column) => `<th>${this.escape(column.label)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${(data.columns || []).length || 1}">${this.empty_state(__("No data"), __("Try changing the filters."))}</td></tr>`}</tbody></table></div>
 				<div class="duxp-pager"><span>${__("Showing")} ${data.total ? start + 1 : 0}–${end} ${__("of")} ${data.total || 0}</span><div><button data-action="previous" ${can_previous ? "" : "disabled"}>${this.icon("back", 14)}</button><button data-action="next" ${can_next ? "" : "disabled"}>${this.icon("forward", 14)}</button></div></div>
 			</section>
 		`);
 
-		const $company_slot = this.$content.find('[data-fieldname="report-company"]');
-		this.report_company_control = this.make_report_filter_control($company_slot, {
-			fieldname: "company",
-			label: "",
-			fieldtype: "Link",
-			options: "Company",
-		}, this.state.report_company);
+		this.report_filter_controls = {};
+		const values = this.state.report_values[data.key] || {};
+		visible_filters.forEach((f) => {
+			const $slot = this.$content.find(`[data-report-fieldname="${this.escape(f.fieldname)}"]`);
+			const control = this.make_report_filter_control($slot, f, values[f.fieldname]);
+			if (control) this.report_filter_controls[f.fieldname] = control;
+		});
 	}
 
 	async open_dashboard() {
