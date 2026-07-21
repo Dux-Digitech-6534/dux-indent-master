@@ -106,7 +106,8 @@
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Warehouse",
-   "options": "Warehouse"
+   "options": "Warehouse",
+   "reqd": 1
   },
   {
    "fieldname": "specification",

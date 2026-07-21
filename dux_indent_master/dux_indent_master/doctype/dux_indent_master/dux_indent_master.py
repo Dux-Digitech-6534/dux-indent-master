@@ -119,6 +119,8 @@ class DuxIndentMaster(Document):
         for row in self.get("items") or []:
             if not row.item_code:
                 frappe.throw(_("Row {0}: Item is mandatory.").format(row.idx))
+            if not row.get("warehouse"):
+                frappe.throw(_("Row {0}: Warehouse is mandatory.").format(row.idx))
             if flt(row.qty) <= 0:
                 frappe.throw(_("Row {0}: Qty must be greater than zero.").format(row.idx))
 

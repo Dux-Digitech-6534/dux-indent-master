@@ -271,7 +271,7 @@ DOCUMENT_CONFIG = {
             _column("Stock Entry Type", "stock_entry_type", "purpose"),
             _column("Posting Date", "posting_date"),
             _column("Company", "company"),
-            _column("Status", "status"),
+            _column("Status", "docstatus"),
         ],
         "detail_fields": [
             _column("Stock Entry", "name"),
@@ -281,7 +281,7 @@ DOCUMENT_CONFIG = {
             _column("From Warehouse", "from_warehouse"),
             _column("To Warehouse", "to_warehouse"),
             _column("Project", "project"),
-            _column("Status", "status"),
+            _column("Status", "docstatus"),
             _column("Remarks", "remarks"),
         ],
         "child_tables": [
@@ -393,28 +393,32 @@ DOCUMENT_CONFIG = {
     },
     "delivery_receipts": {
         "label": "Delivery Challan Receipts",
-        "doctype": "Delivery Challan",
+        "doctype": "Delivery Challan Receipt",
         "icon": "receipt",
         "description": "Receive and reconcile dispatched Delivery Challans.",
         "columns": [
-            _column("Delivery Challan", "name"),
-            _column("Project / Site", "project"),
+            _column("Receipt", "name"),
+            _column("Delivery Challan", "delivery_challan"),
             _column("Posting Date", "posting_date"),
-            _column("Source Warehouse", "source_warehouse"),
-            _column("Received By", "received_by"),
+            _column("Company", "company"),
+            _column("Transit Warehouse", "transit_warehouse"),
             _column("Status", "status"),
         ],
         "detail_fields": [
-            _column("Delivery Challan", "name"),
-            _column("Project / Site", "project"),
+            _column("Receipt", "name"),
+            _column("Delivery Challan", "delivery_challan"),
+            _column("Company", "company"),
             _column("Posting Date", "posting_date"),
-            _column("Dispatch Date/Time", "dispatch_datetime"),
-            _column("Receipt Date/Time", "receipt_datetime"),
-            _column("Dispatched By", "dispatched_by"),
-            _column("Received By", "received_by"),
             _column("Source Warehouse", "source_warehouse"),
+            _column("Transit Warehouse", "transit_warehouse"),
             _column("Target Warehouse", "target_warehouse"),
+            _column("Project", "project"),
+            _column("Cost Center", "cost_center"),
+            _column("Stock Entry", "stock_entry"),
+            _column("Received By", "received_by"),
+            _column("Receipt Date/Time", "receipt_datetime"),
             _column("Status", "status"),
+            _column("Remarks", "remarks"),
         ],
         "child_tables": [
             {
@@ -422,19 +426,21 @@ DOCUMENT_CONFIG = {
                 "label": "Receipt Items",
                 "fields": [
                     _column("Item", "item_code"),
-                    _column("Dispatched Qty", "qty"),
+                    _column("Item Name", "item_name"),
+                    _column("Challan Qty", "challan_qty"),
+                    _column("Already Received", "already_received_qty"),
                     _column("Received Qty", "received_qty"),
                     _column("Pending Qty", "pending_qty"),
                     _column("UOM", "uom"),
-                    _column("Status", "row_status"),
+                    _column("Transit Warehouse", "transit_warehouse"),
+                    _column("Target Warehouse", "target_warehouse"),
+                    _column("Remarks", "remarks"),
                 ],
             }
         ],
         "date_field": "posting_date",
         "company_field": "company",
-        "search_fields": ["name", "project", "received_by"],
-        "default_filters": {"status": ["in", ["In Transit", "Partially Received", "Received", "Closed with Shortage"]]},
-        "allow_create": False,
+        "search_fields": ["name", "delivery_challan", "received_by", "stock_entry"],
     },
     "dux_indent_master": {
         "label": "Dux Indent Master",
@@ -612,9 +618,11 @@ FORM_CONFIG = {
                 "label": "Request Details",
                 "fields": [
                     "material_request_type",
+                    "customer",
                     "transaction_date",
                     "schedule_date",
                     "company",
+                    "buying_price_list",
                     "set_warehouse",
                     "set_from_warehouse",
                     "custom_dux_indent_remark",
@@ -626,7 +634,13 @@ FORM_CONFIG = {
             },
             {
                 "label": "Indent Reference",
-                "fields": ["custom_dux_indent_master", "custom_dux_indent_user", "custom_dux_indent_department"],
+                "fields": [
+                    "custom_dux_indent_master",
+                    "custom_dux_indent_user",
+                    "custom_dux_indent_department",
+                    "custom_dux_indent_note_attachment",
+                    "custom_dux_indent_design_attachment",
+                ],
                 "collapsible": True,
                 "collapsed": True,
                 "position": "after_tables",
@@ -635,7 +649,11 @@ FORM_CONFIG = {
         "tables": [
             {
                 "fieldname": "items",
-                "fields": ["item_code", "schedule_date", "qty", "uom", "custom_dux_indent_specification", "description"],
+                "fields": [
+                    "item_code", "schedule_date", "qty", "uom", "stock_uom",
+                    "from_warehouse", "rate", "amount", "expense_account",
+                    "project", "cost_center", "custom_dux_indent_specification", "description",
+                ],
                 "field_overrides": {
                     "schedule_date": {"label": "Required Date", "force_read_only": True},
                     "custom_dux_indent_specification": {"label": "Specification", "force_editable": True},
@@ -645,90 +663,172 @@ FORM_CONFIG = {
     },
     "purchase_order": {
         "sections": [
-            {"label": "Supplier & Schedule", "fields": ["naming_series", "supplier", "transaction_date", "schedule_date", "company", "set_warehouse", "custom_priority"]},
-            {"label": "Currency & Terms", "fields": ["currency", "conversion_rate", "buying_price_list", "tc_name", "terms"]},
+            {"label": "Supplier & Schedule", "fields": ["naming_series", "supplier", "transaction_date", "schedule_date", "company", "supplier_warehouse", "set_warehouse", "cost_center", "project"]},
+            {"label": "Discount", "fields": ["apply_discount_on", "additional_discount_percentage", "discount_amount"]},
+            {"label": "Supplier Address, Billing & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "billing_address", "billing_address_display", "contact_person", "contact_display", "contact_mobile", "contact_email", "place_of_supply"]},
+            {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display"]},
+            {"label": "Terms", "fields": ["payment_terms_template", "tc_name", "terms"]},
         ],
         "tables": [
             {"fieldname": "items", "fields": ["item_code", "schedule_date", "qty", "uom", "conversion_factor", "rate", "description"]},
+            {"fieldname": "taxes", "fields": ["category", "add_deduct_tax", "charge_type", "account_head", "description", "rate", "tax_amount"]},
         ],
     },
     "purchase_receipt": {
         "sections": [
-            {"label": "Supplier & Posting", "fields": ["naming_series", "supplier", "posting_date", "posting_time", "set_posting_time", "company", "set_warehouse", "rejected_warehouse", "is_return"]},
-            {"label": "Delivery Note & Currency", "fields": ["supplier_delivery_note", "currency", "conversion_rate", "buying_price_list"]},
+            {"label": "Supplier & Posting", "fields": ["naming_series", "supplier", "supplier_delivery_note", "purchase_order", "posting_date", "posting_time", "set_posting_time", "company", "set_warehouse", "rejected_warehouse", "is_return"]},
+            {"label": "Discount", "position": "after_tables", "fields": ["apply_discount_on", "additional_discount_percentage", "discount_amount"]},
+            {"label": "Supplier Address, Billing & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "billing_address", "billing_address_display", "contact_person", "contact_display", "contact_mobile", "contact_email", "place_of_supply"]},
+            {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display"]},
         ],
         "tables": [
-            {"fieldname": "items", "fields": ["item_code", "item_name", "received_qty", "qty", "rejected_qty", "uom", "conversion_factor", "rate", "purchase_order", "purchase_order_item", "description"]},
+            {"fieldname": "items", "fields": ["item_code", "received_qty", "qty", "rejected_qty", "uom", "conversion_factor", "rate", "description"]},
             {"fieldname": "taxes", "fields": ["category", "add_deduct_tax", "charge_type", "account_head", "description", "rate", "tax_amount"]},
         ],
     },
     "purchase_invoice": {
         "sections": [
-            {"label": "Supplier & Posting", "fields": ["naming_series", "supplier", "posting_date", "posting_time", "set_posting_time", "due_date", "company", "bill_no", "bill_date"]},
-            {"label": "Payment & Currency", "fields": ["currency", "conversion_rate", "is_paid", "apply_tds", "mode_of_payment", "credit_to"]},
+            {"label": "Supplier & Posting", "fields": ["naming_series", "supplier", "posting_date", "posting_time", "set_posting_time", "due_date", "company", "bill_no", "bill_date", "cost_center", "project"]},
+            {"label": "Payment & Currency", "fields": ["currency", "conversion_rate", "is_paid", "apply_tds", "tax_withholding_group", "mode_of_payment", "credit_to", "cash_bank_account", "paid_amount"]},
             {"label": "Stock & Warehouse", "fields": ["update_stock", "set_warehouse", "rejected_warehouse"]},
+            {"label": "Discount", "fields": ["apply_discount_on", "additional_discount_percentage", "discount_amount"]},
+            {"label": "Write Off", "fields": ["write_off_amount", "write_off_account", "write_off_cost_center"]},
+            {"label": "Supplier Address, Billing & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "billing_address", "billing_address_display", "contact_person", "contact_display", "contact_mobile", "contact_email", "place_of_supply"]},
+            {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display"]},
+            {"label": "Transport", "fields": ["transporter", "gst_transporter_id", "mode_of_transport", "vehicle_no", "driver", "driver_name", "lr_no", "lr_date", "distance"]},
+            {"label": "Hold & Terms", "fields": ["on_hold", "release_date", "hold_comment", "payment_terms_template", "tc_name", "terms"]},
         ],
         "tables": [
-            {"fieldname": "items", "fields": ["item_code", "item_name", "qty", "uom", "conversion_factor", "rate", "expense_account", "purchase_order", "po_detail", "purchase_receipt", "pr_detail", "description"]},
+            {"fieldname": "items", "fields": ["item_code", "item_name", "qty", "uom", "conversion_factor", "rate", "expense_account", "purchase_order", "purchase_receipt", "description"]},
             {"fieldname": "taxes", "fields": ["category", "add_deduct_tax", "charge_type", "account_head", "description", "rate", "tax_amount"]},
+            {"fieldname": "tax_withholding_entries", "fields": ["tax_withholding_category", "taxable_amount", "withholding_amount"]},
+            {"fieldname": "advances", "fields": ["reference_type", "reference_name", "remarks", "advance_amount", "allocated_amount"]},
+            {"fieldname": "payment_schedule", "fields": ["payment_term", "description", "due_date", "invoice_portion", "payment_amount", "outstanding"]},
         ],
     },
     "stock_entry": {
         "sections": [
-            {"label": "Stock Movement", "fields": ["naming_series", "stock_entry_type", "company", "posting_date", "posting_time", "set_posting_time", "from_warehouse", "to_warehouse"]},
-            {"label": "Reference", "fields": ["project", "remarks"]},
+            {"label": "Stock Movement", "fields": ["naming_series", "stock_entry_type", "company", "posting_date", "posting_time", "set_posting_time", "from_warehouse", "to_warehouse", "is_opening"]},
+            {"label": "Manufacturing", "fields": ["work_order", "from_bom", "use_multi_level_bom", "bom_no", "fg_completed_qty", "process_loss_percentage", "process_loss_qty"]},
+            {"label": "Supplier & GST", "fields": ["supplier", "supplier_address", "bill_from_address", "bill_to_address", "place_of_supply", "tax_category", "taxes_and_charges"]},
+            {"label": "Transport", "fields": ["transporter", "gst_transporter_id", "mode_of_transport", "vehicle_no", "lr_no", "lr_date", "distance"]},
+            {"label": "References", "fields": ["project", "purchase_order", "purchase_receipt_no", "delivery_note_no", "job_card", "remarks"]},
         ],
         "tables": [
             {"fieldname": "items", "fields": ["item_code", "item_name", "qty", "uom", "conversion_factor", "basic_rate", "expense_account", "cost_center", "description"]},
+            {"fieldname": "taxes", "fields": ["charge_type", "account_head", "rate", "gst_tax_type", "tax_amount"]},
+            {"fieldname": "additional_costs", "fields": ["expense_account", "description", "amount", "base_amount"]},
+            {"fieldname": "doc_references", "fields": ["link_doctype", "link_name"]},
         ],
     },
     "payment_entry": {
         "sections": [
-            {"label": "Payment Details", "fields": ["naming_series", "payment_type", "posting_date", "company", "mode_of_payment", "party_type", "party", "party_name"]},
-            {"label": "Accounts & Amount", "fields": ["paid_from", "paid_to", "paid_amount", "received_amount", "source_exchange_rate", "target_exchange_rate"]},
+            {"label": "Payment Details", "fields": ["naming_series", "payment_type", "posting_date", "company", "mode_of_payment", "party_type", "party", "party_name", "apply_tds", "tax_withholding_category", "tax_withholding_group"]},
+            {"label": "Accounts & Amount", "fields": ["paid_from", "paid_to", "paid_amount", "received_amount", "source_exchange_rate", "target_exchange_rate", "unallocated_amount", "difference_amount"]},
+            {"label": "Bank Accounts", "fields": ["bank_account", "party_bank_account", "bank", "bank_account_no", "clearance_date"]},
+            {"label": "Address & Accounting", "fields": ["company_address", "customer_address", "place_of_supply", "cost_center", "project"]},
             {"label": "Reference", "fields": ["reference_no", "reference_date", "remarks"]},
         ],
         "tables": [
-            {"fieldname": "references", "fields": ["reference_doctype", "reference_name", "total_amount", "outstanding_amount", "allocated_amount"]},
+            {
+                "fieldname": "references",
+                "fields": [
+                    "reference_doctype", "reference_name", "due_date", "bill_no", "payment_term",
+                    "payment_term_outstanding", "total_amount", "outstanding_amount",
+                    "allocated_amount", "exchange_rate", "account",
+                ],
+            },
+            {"fieldname": "taxes", "fields": ["charge_type", "account_head", "description", "rate", "tax_amount"]},
+            {"fieldname": "deductions", "fields": ["account", "cost_center", "amount"]},
+            {"fieldname": "tax_withholding_entries", "fields": ["tax_withholding_category", "taxable_amount", "withholding_amount"]},
         ],
     },
     "delivery_challan": {
         "sections": [
-            {"label": "Delivery Details", "fields": ["naming_series", "company", "posting_date", "posting_time", "source_warehouse", "transit_warehouse", "target_warehouse"]},
-            {"label": "Indent Reference", "fields": ["custom_dux_indent_master", "custom_dux_indent_required_date", "remarks"]},
+            {"label": "Delivery Details", "fields": ["company", "posting_date", "source_warehouse", "transit_warehouse", "target_warehouse", "project", "cost_center", "remarks"]},
+            {"label": "Indent Reference", "fields": ["custom_dux_indent_master", "custom_dux_indent_required_date"]},
+            {"label": "Transport", "fields": ["vehicle_no", "driver_name", "driver_mobile", "transporter", "lr_no", "dispatch_from_address", "dispatch_to_address"]},
+            {"label": "Dispatch & Receipt Tracking", "fields": ["dispatch_stock_entry", "dispatched_by", "dispatch_datetime", "receipt_stock_entries", "received_by", "receipt_datetime", "shortage_stock_entry", "shortage_closure_type", "shortage_reason"]},
         ],
         "tables": [
-            {"fieldname": "items", "fields": ["item_code", "item_name", "qty", "uom", "received_qty", "custom_delivery_challan_qty", "custom_dux_indent_specification", "description"]},
+            {"fieldname": "items", "fields": ["item_code", "item_name", "qty", "uom", "received_qty", "custom_delivery_challan_qty", "custom_dux_indent_specification"]},
         ],
     },
     "dux_indent_master": {
         "sections": [
             {"label": "Indent Details", "fields": ["naming_series", "user_full_name", "department_name", "company_name", "transaction_date", "required_date"]},
-            {"label": "Notes & Attachments", "fields": ["note_attachment", "design_attachment", "remark"]},
+            {
+                "label": "Notes & Attachments",
+                "fields": ["note_attachment", "design_attachment", "remark"],
+                "field_overrides": {
+                    "note_attachment": {"label": "Attach Note"},
+                    "design_attachment": {"label": "Attach Design"},
+                },
+            },
         ],
         "tables": [
-            {"fieldname": "items", "fields": ["item_code", "required_date", "qty", "uom", "warehouse", "specification", "stock_qty"]},
+            {
+                "fieldname": "items",
+                "fields": [
+                    "item_code", "required_date", "qty", "purchase_qty", "qty_balanced",
+                    "uom", "warehouse", "specification", "stock_qty",
+                ],
+                "field_overrides": {"warehouse": {"reqd": True}},
+            },
         ],
     },
     "supplier": {
         "sections": [
-            {"label": "Supplier Details", "fields": ["supplier_name", "supplier_group", "supplier_type", "country", "tax_id", "default_currency", "default_price_list", "website", "disabled"]},
+            {"label": "Supplier Details", "fields": ["supplier_name", "supplier_group", "supplier_type", "gender", "country", "custom_bp_code", "custom_townproject_", "is_transporter", "supplier_details", "website", "language"]},
+            {"label": "GST & Compliance", "fields": ["tax_id", "gstin", "pan", "gst_category", "tax_category", "tax_withholding_category", "tax_withholding_group", "gst_transporter_id", "is_reverse_charge_applicable"]},
+            {"label": "Address & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_primary_address", "primary_address", "supplier_primary_contact", "mobile_no", "email_id"]},
+            {"label": "Buying Defaults", "fields": ["default_currency", "default_bank_account", "default_price_list", "payment_terms"]},
+            {"label": "Controls", "fields": ["is_internal_supplier", "represents_company", "allow_purchase_invoice_creation_without_purchase_order", "allow_purchase_invoice_creation_without_purchase_receipt", "disabled", "is_frozen", "on_hold", "hold_type", "release_date"]},
         ],
-        "tables": [],
+        "tables": [
+            {"fieldname": "accounts", "fields": ["company", "account", "advance_account"]},
+            {"fieldname": "companies", "fields": ["company"]},
+            {"fieldname": "customer_numbers", "fields": ["company", "customer_number"]},
+            {"fieldname": "portal_users", "fields": ["user"]},
+        ],
     },
     "item": {
         "sections": [
-            {"label": "Item Details", "fields": ["item_code", "item_name", "item_group", "stock_uom", "brand", "custom_category", "description"]},
-            {"label": "Stock & Valuation", "fields": ["is_stock_item", "include_item_in_manufacturing", "valuation_rate", "standard_rate", "default_material_request_type", "disabled"]},
+            {"label": "Item Details", "fields": ["item_code", "item_name", "item_group", "gst_hsn_code", "stock_uom", "brand", "description", "disabled"]},
+            {"label": "Stock & Valuation", "fields": ["is_stock_item", "include_item_in_manufacturing", "opening_stock", "valuation_rate", "standard_rate", "valuation_method", "allow_negative_stock", "shelf_life_in_days", "end_of_life", "weight_per_unit", "weight_uom", "default_material_request_type"]},
+            {"label": "Batch & Serial", "fields": ["has_batch_no", "create_new_batch", "batch_number_series", "has_expiry_date", "retain_sample", "sample_quantity", "has_serial_no", "serial_no_series"]},
+            {"label": "Assets", "fields": ["is_fixed_asset", "auto_create_assets", "is_grouped_asset", "asset_category", "asset_naming_series"]},
+            {"label": "Purchase", "fields": ["purchase_uom", "min_order_qty", "safety_stock", "is_purchase_item", "lead_time_days", "inspection_required_before_purchase", "quality_inspection_template"]},
+            {"label": "Sales", "fields": ["sales_uom", "grant_commission", "is_sales_item", "max_discount", "inspection_required_before_delivery"]},
         ],
         "tables": [
             {"fieldname": "uoms", "fields": ["uom", "conversion_factor"]},
             {"fieldname": "item_defaults", "fields": ["company", "default_warehouse", "default_price_list"]},
+            {"fieldname": "barcodes", "fields": ["barcode", "barcode_type", "uom"]},
+            {"fieldname": "reorder_levels", "fields": ["warehouse", "warehouse_reorder_level", "warehouse_reorder_qty", "material_request_type"]},
+            {"fieldname": "customer_items", "fields": ["customer_name", "ref_code"]},
+            {"fieldname": "taxes", "fields": ["item_tax_template", "tax_category"]},
         ],
     },
 }
 
-FORM_CONFIG["delivery_receipts"] = deepcopy(FORM_CONFIG["delivery_challan"])
+FORM_CONFIG["delivery_receipts"] = {
+    "sections": [
+        {"label": "Receipt Details", "fields": ["delivery_challan", "company", "posting_date", "status"]},
+        {"label": "Warehouse Movement", "fields": ["source_warehouse", "transit_warehouse", "target_warehouse"]},
+        {"label": "Reference & Remarks", "fields": ["project", "cost_center", "remarks"]},
+        {"label": "Receipt Tracking", "fields": ["stock_entry", "received_by", "receipt_datetime"]},
+    ],
+    "tables": [
+        {
+            "fieldname": "items",
+            "fields": [
+                "item_code", "item_name", "uom", "challan_qty", "already_received_qty",
+                "pending_qty", "received_qty", "transit_warehouse", "target_warehouse", "remarks",
+            ],
+        },
+    ],
+}
 
 
 MENU_GROUPS = [
@@ -932,6 +1032,9 @@ def get_document_list(
         start=start,
         page_length=page_length,
     )
+    if any(column["fieldname"] == "docstatus" for column in columns):
+        for row in rows:
+            row.docstatus = _docstatus_label(row.docstatus)
 
     status_options = []
     if status_field:
@@ -1116,6 +1219,72 @@ def _route_key_for_doctype(doctype):
     frappe.throw(_("A portal form is not configured for {0}.").format(doctype))
 
 
+def _portal_route_key_for_doctype(doctype):
+    return next(
+        (
+            route_key
+            for route_key, config in DOCUMENT_CONFIG.items()
+            if config["doctype"] == doctype and route_key in FORM_CONFIG
+        ),
+        None,
+    )
+
+
+def _get_portal_workflow_context(doc):
+    """Return native workflow transitions available to the current user."""
+    from frappe.model.workflow import get_transitions, get_workflow_name
+
+    workflow_name = get_workflow_name(doc.doctype)
+    if not workflow_name:
+        return {"name": None, "state": None, "actions": []}
+
+    workflow = frappe.get_cached_doc("Workflow", workflow_name)
+    state_field = workflow.workflow_state_field
+    current_state = doc.get(state_field)
+    if doc.is_new() or not current_state:
+        return {"name": workflow_name, "state": current_state, "actions": []}
+
+    return {
+        "name": workflow_name,
+        "state": current_state,
+        "actions": [
+            {
+                "action": transition.get("action"),
+                "label": _(transition.get("action")),
+                "next_state": transition.get("next_state"),
+                "style": _workflow_action_style(transition.get("action")),
+            }
+            for transition in get_transitions(doc, workflow)
+        ],
+    }
+
+
+def _workflow_action_style(action):
+    normalized = cstr(action).strip().lower()
+    if normalized in ("reject", "cancel"):
+        return "danger"
+    if normalized in ("approve", "submit", "submit for approval"):
+        return "primary"
+    return "secondary"
+
+
+def _get_portal_submit_action(doc, workflow_context=None):
+    if doc.docstatus != 0 or not doc.meta.is_submittable:
+        return None
+
+    workflow_context = workflow_context or _get_portal_workflow_context(doc)
+    if workflow_context["name"]:
+        for action in workflow_context["actions"]:
+            normalized = cstr(action["action"]).strip().lower()
+            if normalized == "submit" or normalized.startswith("submit for"):
+                return action
+        return None
+
+    if frappe.has_permission(doc.doctype, ptype="submit", doc=doc):
+        return {"action": None, "label": _("Save & Submit"), "next_state": None, "style": "primary"}
+    return None
+
+
 def _document_lifecycle_actions(route_key, doc):
     actions = []
     status = doc.get("status") or ""
@@ -1165,6 +1334,42 @@ def _document_lifecycle_actions(route_key, doc):
         and not frappe.db.exists(doc.doctype, {"amended_from": doc.name})
     ):
         actions.append({"action": "amend", "label": _("Amend"), "style": "primary"})
+
+    return actions
+
+
+def _document_operational_actions(route_key, doc):
+    """Expose custom-app actions only when their native form would expose them."""
+    actions = []
+    status = cstr(doc.get("status"))
+    can_write = frappe.has_permission(doc.doctype, ptype="write", doc=doc)
+
+    if route_key == "delivery_challan":
+        if doc.docstatus == 0 and can_write:
+            actions.append({"action": "dc_add_material", "label": _("Add Material"), "style": "secondary"})
+        if doc.docstatus == 1 and status == "Pending Dispatch" and can_write:
+            actions.append({"action": "dc_dispatch", "label": _("Dispatch Material"), "style": "primary"})
+        if (
+            doc.docstatus == 1
+            and status in ("In Transit", "Partially Received")
+            and frappe.has_permission("Delivery Challan Receipt", ptype="create")
+        ):
+            actions.append({"action": "dc_create_receipt", "label": _("Create Receipt"), "style": "primary"})
+        if doc.docstatus == 1 and status == "Partially Received" and can_write:
+            actions.append({"action": "dc_close_shortage", "label": _("Close Shortage"), "style": "warning"})
+
+    if route_key == "dux_indent_master":
+        is_closed = status == "Closed" or cint(doc.get("manually_closed"))
+        if doc.get("items") and doc.docstatus != 2:
+            actions.append({"action": "indent_view_stock", "label": _("View Stock"), "style": "secondary"})
+        if doc.docstatus == 1 and not is_closed and can_write:
+            if (
+                not doc.get("material_purchase")
+                and frappe.has_permission("Material Request", ptype="create")
+            ):
+                actions.append({"action": "indent_material_purchase", "label": _("Material Purchase"), "style": "primary"})
+            if frappe.has_permission("Delivery Challan", ptype="create"):
+                actions.append({"action": "indent_delivery_challan", "label": _("Delivery Challan"), "style": "primary"})
 
     return actions
 
@@ -1221,6 +1426,167 @@ def _get_document_activity(doc):
     }
 
 
+def _portal_route_for_doctype(doctype):
+    """Return the portal route for a configured DocType, if it has a document view."""
+    for route_key, config in DOCUMENT_CONFIG.items():
+        if config.get("doctype") == doctype and route_key in FORM_CONFIG:
+            return route_key
+    return None
+
+
+def _linked_document_field_pairs(meta, linked_doctype):
+    """Yield Link/Dynamic Link fields in a meta that can point at linked_doctype."""
+    fields_by_name = {df.fieldname: df for df in meta.fields}
+    for df in meta.fields:
+        if df.fieldtype == "Link" and df.options == linked_doctype:
+            yield df, None
+        elif df.fieldtype == "Dynamic Link" and df.options:
+            doctype_field = fields_by_name.get(df.options)
+            if doctype_field:
+                yield df, doctype_field
+
+
+def _get_linked_documents(doc):
+    """Return direct, permission-aware links between portal-supported documents.
+
+    Standard ERPNext procurement references mainly live in child rows (for example
+    Purchase Order Item.material_request). Custom apps also commonly use parent
+    Link or Dynamic Link fields, so all three shapes are discovered here.
+    """
+    candidates = {}
+
+    def add_candidate(doctype, name, relation):
+        route_key = _portal_route_for_doctype(doctype)
+        name = cstr(name).strip()
+        if not route_key or not name or (doctype == doc.doctype and name == doc.name):
+            return
+        key = (doctype, name)
+        entry = candidates.setdefault(
+            key,
+            {"doctype": doctype, "name": name, "route_key": route_key, "relations": set()},
+        )
+        if relation:
+            entry["relations"].add(cstr(relation))
+
+    def collect_outbound(meta, source, relation_prefix=None):
+        fields_by_name = {df.fieldname: df for df in meta.fields}
+        for df in meta.fields:
+            target_doctype = None
+            if df.fieldtype == "Link":
+                target_doctype = df.options
+            elif df.fieldtype == "Dynamic Link" and df.options:
+                target_doctype = source.get(df.options)
+                if not fields_by_name.get(df.options):
+                    continue
+            if not target_doctype:
+                continue
+            relation = df.label or df.fieldname
+            if relation_prefix:
+                relation = "{0}: {1}".format(relation_prefix, relation)
+            add_candidate(target_doctype, source.get(df.fieldname), relation)
+
+    collect_outbound(doc.meta, doc)
+    for table_df in doc.meta.fields:
+        if table_df.fieldtype != "Table" or not table_df.options:
+            continue
+        child_meta = frappe.get_meta(table_df.options)
+        for row in doc.get(table_df.fieldname) or []:
+            collect_outbound(child_meta, row, table_df.label or table_df.fieldname)
+
+    supported_doctypes = []
+    for route_key, config in DOCUMENT_CONFIG.items():
+        doctype = config.get("doctype")
+        if (
+            doctype
+            and route_key in FORM_CONFIG
+            and doctype not in supported_doctypes
+            and _can_read_doctype(doctype)
+        ):
+            supported_doctypes.append(doctype)
+
+    for target_doctype in supported_doctypes:
+        target_meta = frappe.get_meta(target_doctype)
+        if target_meta.issingle or target_meta.istable:
+            continue
+
+        for link_df, doctype_df in _linked_document_field_pairs(target_meta, doc.doctype):
+            filters = {link_df.fieldname: doc.name}
+            if doctype_df:
+                filters[doctype_df.fieldname] = doc.doctype
+            try:
+                names = frappe.get_list(
+                    target_doctype,
+                    filters=filters,
+                    pluck="name",
+                    limit_page_length=MAX_PAGE_LENGTH,
+                )
+            except Exception:
+                names = []
+            for name in names:
+                add_candidate(target_doctype, name, link_df.label or link_df.fieldname)
+
+        for table_df in target_meta.fields:
+            if table_df.fieldtype != "Table" or not table_df.options:
+                continue
+            child_meta = frappe.get_meta(table_df.options)
+            for link_df, doctype_df in _linked_document_field_pairs(child_meta, doc.doctype):
+                filters = {
+                    "parenttype": target_doctype,
+                    "parentfield": table_df.fieldname,
+                    link_df.fieldname: doc.name,
+                }
+                if doctype_df:
+                    filters[doctype_df.fieldname] = doc.doctype
+                try:
+                    parent_names = frappe.get_all(
+                        table_df.options,
+                        filters=filters,
+                        pluck="parent",
+                        limit_page_length=MAX_PAGE_LENGTH,
+                    )
+                except Exception:
+                    parent_names = []
+                relation = "{0}: {1}".format(
+                    table_df.label or table_df.fieldname,
+                    link_df.label or link_df.fieldname,
+                )
+                for name in parent_names:
+                    add_candidate(target_doctype, name, relation)
+
+    visible = []
+    for entry in candidates.values():
+        try:
+            linked_doc = frappe.get_doc(entry["doctype"], entry["name"])
+            linked_doc.check_permission("read")
+        except (frappe.DoesNotExistError, frappe.PermissionError):
+            continue
+        visible.append(
+            {
+                "doctype": entry["doctype"],
+                "route_key": entry["route_key"],
+                "name": entry["name"],
+                "status": linked_doc.get("status") or _docstatus_label(linked_doc.docstatus),
+                "modified": linked_doc.modified,
+                "relations": sorted(entry["relations"]),
+            }
+        )
+
+    visible.sort(key=lambda row: row.get("modified") or "", reverse=True)
+    groups = []
+    for route_key, config in DOCUMENT_CONFIG.items():
+        documents = [row for row in visible if row["route_key"] == route_key]
+        if documents:
+            groups.append(
+                {
+                    "route_key": route_key,
+                    "doctype": config["doctype"],
+                    "label": _(config["label"]),
+                    "documents": documents,
+                }
+            )
+    return {"total": len(visible), "groups": groups}
+
+
 @frappe.whitelist()
 def get_document_detail(route_key, name):
     _require_authenticated_user()
@@ -1230,14 +1596,55 @@ def get_document_detail(route_key, name):
     doc.check_permission("read")
     meta = doc.meta
 
+    detail_columns = deepcopy(config.get("detail_fields") or config["columns"])
+    configured_detail_fields = {
+        fieldname for column in detail_columns for fieldname in column.get("fieldnames") or []
+    }
+    for section in (_get_form_config(route_key).get("sections") or []):
+        for fieldname in section.get("fields") or []:
+            df = meta.get_field(fieldname)
+            if (
+                fieldname not in configured_detail_fields
+                and df
+                and not df.hidden
+                and df.fieldtype not in ("Table", "Table MultiSelect", "Section Break", "Column Break", "Tab Break", "HTML", "Button")
+            ):
+                detail_columns.append(_column(df.label or fieldname, fieldname))
+                configured_detail_fields.add(fieldname)
+
     fields = []
-    for column in _resolve_columns(meta, config.get("detail_fields") or config["columns"]):
-        value = doc.get(column["fieldname"])
+    for column in _resolve_columns(meta, detail_columns):
+        value = (
+            _docstatus_label(doc.docstatus)
+            if column["fieldname"] == "docstatus"
+            else doc.get(column["fieldname"])
+        )
         if _has_portal_display_value(value):
             fields.append({**column, "value": value})
 
     child_tables = []
-    for table_config in config.get("child_tables") or []:
+    table_configs = deepcopy(config.get("child_tables") or [])
+    configured_tables = {table.get("fieldname") for table in table_configs}
+    for form_table in (_get_form_config(route_key).get("tables") or []):
+        if form_table.get("fieldname") in configured_tables:
+            continue
+        table_df = meta.get_field(form_table.get("fieldname"))
+        if not table_df or table_df.hidden or table_df.fieldtype != "Table" or not table_df.options:
+            continue
+        child_meta = frappe.get_meta(table_df.options)
+        table_configs.append(
+            {
+                "fieldname": form_table["fieldname"],
+                "label": table_df.label or form_table["fieldname"],
+                "fields": [
+                    _column((child_meta.get_field(fieldname).label or fieldname), fieldname)
+                    for fieldname in form_table.get("fields") or []
+                    if child_meta.get_field(fieldname) and not child_meta.get_field(fieldname).hidden
+                ],
+            }
+        )
+
+    for table_config in table_configs:
         table_field = meta.get_field(table_config["fieldname"])
         if not table_field or table_field.fieldtype != "Table" or not table_field.options:
             continue
@@ -1247,7 +1654,10 @@ def get_document_detail(route_key, name):
         child_rows = []
         for row in doc.get(table_config["fieldname"]) or []:
             child_rows.append(
-                {column["fieldname"]: row.get(column["fieldname"]) for column in child_columns}
+                {
+                    "_row_name": row.name,
+                    **{column["fieldname"]: row.get(column["fieldname"]) for column in child_columns},
+                }
             )
 
         child_columns = [
@@ -1259,6 +1669,8 @@ def get_document_detail(route_key, name):
             )
         ]
 
+        if not child_rows or not child_columns:
+            continue
         child_tables.append(
             {
                 "fieldname": table_config["fieldname"],
@@ -1274,30 +1686,40 @@ def get_document_detail(route_key, name):
         _portal_allows_submitted_update(route_key)
         and _can_update_after_submit(doc, _get_form_config(route_key))
     )
+    workflow = _get_portal_workflow_context(doc)
+    submit_action = _get_portal_submit_action(doc, workflow)
+    workflow_actions = [
+        action
+        for action in workflow["actions"]
+        if not submit_action or action["action"] != submit_action["action"]
+    ]
     return {
         "key": route_key,
         "doctype": doctype,
         "name": doc.name,
         "label": _(config["label"]),
         "description": _(config["description"]),
-        "status": doc.get("status") or _docstatus_label(doc.docstatus),
+        "status": workflow["state"] or doc.get("status") or _docstatus_label(doc.docstatus),
         "docstatus": doc.docstatus,
         "fields": fields,
         "child_tables": child_tables,
         "can_write": can_write,
         "can_edit": bool(doc.docstatus == 0 and can_write),
-        "can_submit": bool(
-            doc.docstatus == 0
-            and meta.is_submittable
-            and frappe.has_permission(doctype, ptype="submit", doc=doc)
-        ),
+        "can_submit": bool(submit_action),
+        "submit_action": submit_action["action"] if submit_action else None,
+        "submit_label": submit_action["label"] if submit_action else None,
+        "workflow_name": workflow["name"],
+        "workflow_state": workflow["state"],
+        "workflow_actions": workflow_actions,
         "can_update_after_submit": can_update_after_submit,
         "can_create": bool(
             config.get("allow_create", True) and frappe.has_permission(doctype, ptype="create")
         ),
         "create_actions": _create_actions_for_document(route_key, doc),
+        "operational_actions": _document_operational_actions(route_key, doc),
         "lifecycle_actions": _document_lifecycle_actions(route_key, doc),
         "activity": _get_document_activity(doc),
+        "linked_documents": _get_linked_documents(doc),
     }
 
 
@@ -1325,6 +1747,14 @@ def get_document_form(route_key, name=None):
             frappe.throw(_("New documents are not available for this portal view."), frappe.PermissionError)
         _require_doctype_permission(doctype, "create")
         doc = frappe.new_doc(doctype)
+        if doctype == "Dux Indent Master":
+            details = _get_logged_in_user_details()
+            if doc.meta.has_field("user_name"):
+                doc.user_name = details.get("user")
+            if doc.meta.has_field("user_full_name"):
+                doc.user_full_name = details.get("full_name") or details.get("user")
+            if doc.meta.has_field("department_name"):
+                doc.department_name = details.get("department")
         can_save = True
 
     return _serialize_document_form(route_key, doc, name=name, can_save=can_save)
@@ -1342,13 +1772,19 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
         field_overrides = section.get("field_overrides") or {}
         fields = []
         for fieldname in section["fields"]:
+            field_override = deepcopy(field_overrides.get(fieldname) or {})
+            if (
+                fieldname in ("schedule_date", "required_date")
+                and meta.has_field("transaction_date")
+            ):
+                field_override.setdefault("min_date_field", "transaction_date")
             field = _serialize_form_field(
                 meta,
                 fieldname,
                 doc,
                 can_save,
                 submitted_update=submitted_update,
-                field_override=field_overrides.get(fieldname),
+                field_override=field_override,
             )
             if field:
                 fields.append(field)
@@ -1360,6 +1796,8 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
                     "collapsible": bool(section.get("collapsible")),
                     "collapsed": bool(section.get("collapsed")),
                     "position": section.get("position") or "before_tables",
+                    "tab": section.get("tab") or "details",
+                    "tab_label": _(section.get("tab_label") or "Details"),
                 }
             )
 
@@ -1376,12 +1814,20 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
         child_fields = []
         field_overrides = table_config.get("field_overrides") or {}
         for fieldname in table_config["fields"]:
+            field_override = deepcopy(field_overrides.get(fieldname) or {})
+            if (
+                fieldname in ("schedule_date", "required_date")
+                and meta.has_field(fieldname)
+            ):
+                field_override["force_read_only"] = True
+                if fieldname == "schedule_date":
+                    field_override.setdefault("label", "Required Date")
             field = _serialize_form_field(
                 child_meta,
                 fieldname,
                 None,
                 table_can_save,
-                field_override=field_overrides.get(fieldname),
+                field_override=field_override,
             )
             if field:
                 child_fields.append(field)
@@ -1408,6 +1854,8 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
             }
         )
 
+    workflow = _get_portal_workflow_context(doc)
+    submit_action = _get_portal_submit_action(doc, workflow) if name else None
     return {
         "key": route_key,
         "doctype": doctype,
@@ -1421,14 +1869,15 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
         "tables": tables,
         "can_save": can_save,
         "can_update_after_submit": bool(submitted_update and can_save),
+        "is_closed": bool(
+            route_key == "dux_indent_master"
+            and (cstr(doc.get("status")) == "Closed" or cint(doc.get("manually_closed")))
+        ),
         "mapping_token": mapping_token,
         "get_items_from": _get_items_from_actions(route_key, is_new=not bool(name)),
-        "can_submit": bool(
-            name
-            and doc.docstatus == 0
-            and meta.is_submittable
-            and frappe.has_permission(doctype, ptype="submit", doc=doc)
-        ),
+        "can_submit": bool(submit_action),
+        "submit_action": submit_action["action"] if submit_action else None,
+        "submit_label": submit_action["label"] if submit_action else None,
     }
 
 
@@ -1616,35 +2065,84 @@ def save_portal_document(route_key, values, name=None, mapping_token=None):
     else:
         doc.save()
 
+    workflow = _get_portal_workflow_context(doc)
+    submit_action = _get_portal_submit_action(doc, workflow)
     return {
         "doctype": doctype,
         "name": doc.name,
         "status": doc.get("status") or _docstatus_label(doc.docstatus),
         "docstatus": doc.docstatus,
-        "can_submit": bool(
-            doc.docstatus == 0
-            and doc.meta.is_submittable
-            and frappe.has_permission(doctype, ptype="submit", doc=doc)
-        ),
+        "can_submit": bool(submit_action),
+        "submit_action": submit_action["action"] if submit_action else None,
+        "submit_label": submit_action["label"] if submit_action else None,
     }
 
 
 @frappe.whitelist()
-def submit_portal_document(route_key, name):
-    """Submit a saved portal draft using the native document controller."""
+def submit_portal_document(route_key, name, workflow_action=None):
+    """Submit a draft through its active Workflow or native controller."""
     _require_authenticated_user()
     config = _get_document_config(route_key)
     _get_form_config(route_key)
     doc = frappe.get_doc(config["doctype"], name)
-    doc.check_permission("submit")
     if not doc.meta.is_submittable or doc.docstatus != 0:
         frappe.throw(_("Only a saved draft document can be submitted."))
-    doc.submit()
+
+    workflow = _get_portal_workflow_context(doc)
+    submit_action = _get_portal_submit_action(doc, workflow)
+    if workflow["name"]:
+        if not submit_action:
+            frappe.throw(
+                _("No workflow submission action is available to you in state {0}.").format(
+                    workflow["state"] or _("Unknown")
+                ),
+                frappe.PermissionError,
+            )
+        requested_action = cstr(workflow_action or submit_action["action"]).strip()
+        if requested_action != submit_action["action"]:
+            frappe.throw(_("This workflow action is not available."), frappe.PermissionError)
+
+        from frappe.model.workflow import apply_workflow
+
+        apply_workflow(doc.as_dict(), submit_action["action"])
+        doc = frappe.get_doc(doc.doctype, doc.name)
+    else:
+        doc.check_permission("submit")
+        doc.submit()
+    return {
+        "doctype": doc.doctype,
+        "name": doc.name,
+        "status": doc.get("workflow_state") or doc.get("status") or _docstatus_label(doc.docstatus),
+        "docstatus": doc.docstatus,
+        "workflow_state": doc.get("workflow_state"),
+    }
+
+
+@frappe.whitelist()
+def apply_portal_workflow_action(route_key, name, action):
+    """Apply one native Frappe Workflow transition available to this user."""
+    _require_authenticated_user()
+    config = _get_document_config(route_key)
+    _get_form_config(route_key)
+    doc = frappe.get_doc(config["doctype"], name)
+    doc.check_permission("read")
+
+    workflow = _get_portal_workflow_context(doc)
+    available = {item["action"]: item for item in workflow["actions"]}
+    action = cstr(action).strip()
+    if not workflow["name"] or action not in available:
+        frappe.throw(_("This workflow action is not available."), frappe.PermissionError)
+
+    from frappe.model.workflow import apply_workflow
+
+    apply_workflow(doc.as_dict(), action)
+    doc = frappe.get_doc(doc.doctype, doc.name)
     return {
         "doctype": doc.doctype,
         "name": doc.name,
         "status": doc.get("status") or _docstatus_label(doc.docstatus),
         "docstatus": doc.docstatus,
+        "workflow_state": doc.get("workflow_state"),
     }
 
 
@@ -1744,15 +2242,35 @@ def get_amended_document_form(route_key, name):
 
 
 @frappe.whitelist()
-def get_portal_item_defaults(item_code, company=None, warehouse=None):
+def get_portal_item_defaults(
+    item_code,
+    company=None,
+    warehouse=None,
+    indent_name=None,
+    indent_item_row_name=None,
+):
     """Provide safe item defaults used by new child rows in portal forms."""
     _require_authenticated_user()
     _require_doctype_permission("Item", "read")
     item = frappe.get_doc("Item", item_code)
     item.check_permission("read")
-    from dux_indent_master.api import get_default_warehouse, get_item_stock_qty
+    from dux_indent_master.api import (
+        get_default_warehouse,
+        get_indent_item_stock_qty_details,
+        get_item_stock_qty,
+    )
 
     selected_warehouse = warehouse or get_default_warehouse(item_code, company)
+    if indent_name or indent_item_row_name:
+        stock_details = get_indent_item_stock_qty_details(
+            item_code=item_code,
+            warehouse=selected_warehouse,
+            indent_name=indent_name,
+            indent_item_row_name=indent_item_row_name,
+        )
+        stock_qty = flt((stock_details or {}).get("stock_qty"))
+    else:
+        stock_qty = get_item_stock_qty(item_code, selected_warehouse)
     return {
         "item_name": item.item_name,
         "description": item.description,
@@ -1763,8 +2281,249 @@ def get_portal_item_defaults(item_code, company=None, warehouse=None):
         "basic_rate": flt(item.last_purchase_rate),
         "warehouse": selected_warehouse,
         "source_warehouse": selected_warehouse,
-        "stock_qty": get_item_stock_qty(item_code, selected_warehouse),
+        "stock_qty": stock_qty,
     }
+
+
+@frappe.whitelist()
+def append_delivery_challan_material(
+    name, item_code, qty, source_warehouse=None, target_warehouse=None, remarks=None
+):
+    """Append one row to a draft challan using its native document controller."""
+    _require_authenticated_user()
+    doc = frappe.get_doc("Delivery Challan", name)
+    doc.check_permission("write")
+    if doc.docstatus != 0:
+        frappe.throw(_("Material can only be added to a draft Delivery Challan."))
+    if not cstr(item_code).strip() or flt(qty) <= 0:
+        frappe.throw(_("Item and a quantity greater than zero are required."))
+
+    item = frappe.get_cached_doc("Item", item_code)
+    item.check_permission("read")
+    row = doc.append(
+        "items",
+        {
+            "item_code": item.name,
+            "item_name": item.item_name,
+            "uom": item.stock_uom,
+            "qty": flt(qty),
+            "source_warehouse": source_warehouse or doc.get("source_warehouse"),
+            "target_warehouse": target_warehouse or doc.get("target_warehouse"),
+            "remarks": remarks,
+        },
+    )
+    if row.meta.has_field("pending_qty"):
+        row.pending_qty = flt(qty)
+    doc.save()
+    return {"name": doc.name, "status": doc.get("status") or _docstatus_label(doc.docstatus)}
+
+
+@frappe.whitelist()
+def run_delivery_challan_action(name, action, closure_type=None, shortage_reason=None):
+    """Run the same custom-app methods used by the native Delivery Challan form."""
+    _require_authenticated_user()
+    doc = frappe.get_doc("Delivery Challan", name)
+    doc.check_permission("read")
+    available = {row["action"] for row in _document_operational_actions("delivery_challan", doc)}
+    action = cstr(action).strip()
+    if action not in available:
+        frappe.throw(_("This Delivery Challan action is not available."), frappe.PermissionError)
+
+    if action == "dc_dispatch":
+        method = frappe.get_attr(
+            "delivery_challan_custom.delivery_challan_custom.doctype.delivery_challan.delivery_challan.dispatch_material"
+        )
+        result = method(name)
+    elif action == "dc_close_shortage":
+        allowed_types = ("Book as Shortage / Loss", "Return to Source Warehouse")
+        if closure_type not in allowed_types or not cstr(shortage_reason).strip():
+            frappe.throw(_("Closure type and shortage reason are required."))
+        method = frappe.get_attr(
+            "delivery_challan_custom.delivery_challan_custom.doctype.delivery_challan.delivery_challan.close_shortage"
+        )
+        result = method(name, closure_type, cstr(shortage_reason).strip())
+    else:
+        frappe.throw(_("This Delivery Challan action must be opened as a form."))
+
+    doc.reload()
+    return {
+        "name": doc.name,
+        "status": doc.get("status") or _docstatus_label(doc.docstatus),
+        "result": result,
+    }
+
+
+@frappe.whitelist()
+def get_delivery_challan_receipt_form(name):
+    """Build the native, unsaved receipt and render it in the portal form."""
+    _require_authenticated_user()
+    challan = frappe.get_doc("Delivery Challan", name)
+    challan.check_permission("read")
+    if not any(
+        row["action"] == "dc_create_receipt"
+        for row in _document_operational_actions("delivery_challan", challan)
+    ):
+        frappe.throw(_("A receipt cannot be created for this Delivery Challan."), frappe.PermissionError)
+
+    maker = frappe.get_attr(
+        "delivery_challan_custom.delivery_challan_custom.doctype.delivery_challan_receipt.delivery_challan_receipt.make_delivery_challan_receipt"
+    )
+    result = maker(name)
+    receipt = result if hasattr(result, "doctype") else frappe.get_doc(result)
+    if receipt.doctype != "Delivery Challan Receipt":
+        frappe.throw(_("The native receipt mapper returned an unexpected document."))
+    receipt.flags.ignore_permissions = False
+    token = _store_mapped_document("delivery_receipts", receipt)
+    return _serialize_document_form(
+        "delivery_receipts", receipt, name=None, can_save=True, mapping_token=token
+    )
+
+
+@frappe.whitelist()
+def get_dux_indent_action_data(name):
+    _require_authenticated_user()
+    doc = frappe.get_doc("Dux Indent Master", name)
+    doc.check_permission("read")
+    if not any(
+        row["action"] == "indent_material_purchase"
+        for row in _document_operational_actions("dux_indent_master", doc)
+    ):
+        frappe.throw(_("Material Purchase is not available for this indent."), frappe.PermissionError)
+    return {
+        "name": doc.name,
+        "company": doc.get("company_name"),
+        "items": [
+            {
+                "row_name": row.name,
+                "item_code": row.item_code,
+                "required_qty": flt(row.qty),
+                "purchased_qty": flt(row.get("purchase_qty")),
+                "balance_qty": max(flt(row.qty) - flt(row.get("purchase_qty")), 0),
+                "warehouse": row.get("warehouse"),
+            }
+            for row in doc.get("items") or []
+        ],
+    }
+
+
+@frappe.whitelist()
+def create_material_request_from_portal_indent(name, selected_items):
+    _require_authenticated_user()
+    doc = frappe.get_doc("Dux Indent Master", name)
+    doc.check_permission("read")
+    if not any(
+        row["action"] == "indent_material_purchase"
+        for row in _document_operational_actions("dux_indent_master", doc)
+    ):
+        frappe.throw(_("Material Purchase is not available for this indent."), frappe.PermissionError)
+    allowed = {row.name: max(flt(row.qty) - flt(row.get("purchase_qty")), 0) for row in doc.get("items") or []}
+    selected_items = frappe.parse_json(selected_items) if isinstance(selected_items, str) else selected_items
+    cleaned = []
+    for row in selected_items or []:
+        row_name = row.get("item_row")
+        qty = flt(row.get("qty"))
+        if row_name not in allowed or qty <= 0 or qty > allowed[row_name]:
+            frappe.throw(_("Purchase quantity must be within the available balance."))
+        cleaned.append({"item_row": row_name, "qty": qty})
+    if not cleaned:
+        frappe.throw(_("Select at least one item with a purchase quantity."))
+    method = frappe.get_attr("dux_indent_master.api.create_material_request_from_indent")
+    return method(name, cleaned)
+
+
+@frappe.whitelist()
+def create_delivery_challan_from_portal_indent(name):
+    _require_authenticated_user()
+    doc = frappe.get_doc("Dux Indent Master", name)
+    doc.check_permission("read")
+    if not any(
+        row["action"] == "indent_delivery_challan"
+        for row in _document_operational_actions("dux_indent_master", doc)
+    ):
+        frappe.throw(_("Delivery Challan is not available for this indent."), frappe.PermissionError)
+    method = frappe.get_attr("dux_indent_master.api.create_delivery_challan_from_indent")
+    return method(name)
+
+
+@frappe.whitelist()
+def get_dux_indent_stock(name, row_names=None):
+    _require_authenticated_user()
+    doc = frappe.get_doc("Dux Indent Master", name)
+    doc.check_permission("read")
+    row_names = frappe.parse_json(row_names) if isinstance(row_names, str) else row_names
+    selected = set(row_names or [])
+    rows = [row for row in doc.get("items") or [] if not selected or row.name in selected]
+    if selected and len(rows) != len(selected):
+        frappe.throw(_("One or more selected rows do not belong to this indent."))
+    result = []
+    for row in rows:
+        filters = {"item_code": row.item_code, "actual_qty": [">", 0]}
+        if row.get("warehouse"):
+            filters["warehouse"] = row.warehouse
+        bins = frappe.get_list(
+            "Bin", filters=filters, fields=["warehouse", "actual_qty"], order_by="warehouse asc"
+        )
+        for bin_row in bins:
+            actual_qty = flt(bin_row.get("actual_qty"))
+            if actual_qty <= 0:
+                continue
+            result.append(
+                {
+                    "row_name": row.name,
+                    "item_code": row.item_code,
+                    "warehouse": bin_row.get("warehouse"),
+                    "actual_qty": actual_qty,
+                }
+            )
+    return result
+
+
+@frappe.whitelist()
+def get_payment_entry_outstanding(values, mode="invoices"):
+    """Return native ERPNext outstanding references for the current form values."""
+    _require_authenticated_user()
+    values = frappe.parse_json(values) if isinstance(values, str) else values
+    if not isinstance(values, dict):
+        frappe.throw(_("Invalid Payment Entry values."))
+    required = ("posting_date", "company", "payment_type", "party_type", "party")
+    if any(not values.get(fieldname) for fieldname in required):
+        frappe.throw(_("Posting Date, Company, Payment Type, Party Type and Party are required."))
+    if mode not in ("invoices", "orders"):
+        frappe.throw(_("Invalid outstanding reference mode."))
+
+    payment_type = values.get("payment_type")
+    party_account = values.get("paid_from") if payment_type == "Receive" else values.get("paid_to")
+    args = frappe._dict(
+        posting_date=values.get("posting_date"),
+        company=values.get("company"),
+        party_type=values.get("party_type"),
+        payment_type=payment_type,
+        party=values.get("party"),
+        party_account=party_account,
+        cost_center=values.get("cost_center"),
+        get_outstanding_invoices=mode == "invoices",
+        get_orders_to_be_billed=mode == "orders",
+    )
+    method = frappe.get_attr(
+        "erpnext.accounts.doctype.payment_entry.payment_entry.get_outstanding_reference_documents"
+    )
+    rows = method(args) or []
+    return [
+        {
+            "reference_doctype": row.get("voucher_type"),
+            "reference_name": row.get("voucher_no"),
+            "due_date": row.get("due_date"),
+            "bill_no": row.get("bill_no"),
+            "payment_term": row.get("payment_term"),
+            "payment_term_outstanding": row.get("payment_term_outstanding"),
+            "total_amount": row.get("invoice_amount"),
+            "outstanding_amount": row.get("outstanding_amount"),
+            "allocated_amount": row.get("allocated_amount"),
+            "account": row.get("account"),
+            "exchange_rate": row.get("exchange_rate"),
+        }
+        for row in rows
+    ]
 
 
 def _get_document_config(route_key):
@@ -1785,18 +2544,20 @@ def _serialize_form_field(
     meta, fieldname, doc, can_save, submitted_update=False, field_override=None
 ):
     df = meta.get_field(fieldname)
-    if not df or df.fieldtype in ("Table", "Table MultiSelect", "Section Break", "Column Break", "Tab Break", "HTML", "Button"):
+    field_override = field_override or {}
+    if (
+        not df
+        or (df.hidden and not field_override.get("include_hidden"))
+        or df.fieldtype in ("Table", "Table MultiSelect", "Section Break", "Column Break", "Tab Break", "HTML", "Button")
+    ):
         return None
 
     fieldtype = {
         "Text Editor": "Small Text",
         "Code": "Small Text",
-        "Attach": "Data",
-        "Attach Image": "Data",
     }.get(df.fieldtype, df.fieldtype)
 
     value = doc.get(fieldname) if doc else None
-    field_override = field_override or {}
     force_editable = bool(field_override.get("force_editable"))
     force_read_only = bool(field_override.get("force_read_only"))
     editable = bool(
@@ -1811,7 +2572,7 @@ def _serialize_form_field(
         "fieldtype": fieldtype,
         "options": df.options,
         "ignore_user_permissions": bool(df.ignore_user_permissions),
-        "reqd": bool(df.reqd),
+        "reqd": bool(field_override["reqd"] if "reqd" in field_override else df.reqd),
         "read_only": not editable,
         "allow_on_submit": bool(df.allow_on_submit),
         "depends_on": df.depends_on,
@@ -1848,6 +2609,7 @@ def _apply_portal_form_values(
             field_override = field_overrides.get(fieldname) or {}
             if (
                 not df
+                or (df.hidden and not field_override.get("include_hidden"))
                 or (submitted_update and not df.allow_on_submit)
                 or field_override.get("force_read_only")
                 or (
@@ -1892,6 +2654,7 @@ def _apply_portal_form_values(
                 field_override = field_overrides.get(child_fieldname) or {}
                 if (
                     not child_df
+                    or (child_df.hidden and not field_override.get("include_hidden"))
                     or field_override.get("force_read_only")
                     or (
                         child_df.read_only
@@ -1919,14 +2682,22 @@ def _apply_portal_form_values(
 
 
 def _prepare_portal_document(doc):
-    if doc.doctype == "Material Request":
-        transaction_date = doc.get("transaction_date")
-        required_by = doc.get("schedule_date")
-        if transaction_date and required_by and getdate(required_by) < getdate(transaction_date):
-            frappe.throw(_("Required By cannot be earlier than Transaction Date."))
-        for row in doc.get("items") or []:
-            if row.meta.has_field("schedule_date"):
-                row.schedule_date = required_by or transaction_date or nowdate()
+    transaction_date = doc.get("transaction_date") if doc.meta.has_field("transaction_date") else None
+    for required_date_field in ("schedule_date", "required_date"):
+        if not doc.meta.has_field(required_date_field):
+            continue
+        required_date = doc.get(required_date_field)
+        if transaction_date and required_date and getdate(required_date) < getdate(transaction_date):
+            required_date_df = doc.meta.get_field(required_date_field)
+            field_label = required_date_df.label if required_date_df else _("Required Date")
+            frappe.throw(_("{0} cannot be earlier than Transaction Date.").format(_(field_label)))
+        child_required_date = required_date or transaction_date or nowdate()
+        for table_df in doc.meta.fields:
+            if table_df.fieldtype != "Table":
+                continue
+            for row in doc.get(table_df.fieldname) or []:
+                if row.meta.has_field(required_date_field):
+                    row.set(required_date_field, child_required_date)
 
     if doc.doctype == "Delivery Challan" and doc.get("company") and not doc.get("transit_warehouse"):
         from dux_indent_master.api import _get_delivery_challan_transit_warehouse
@@ -2025,7 +2796,12 @@ def _resolve_columns(meta, requested_columns):
             (
                 candidate
                 for candidate in requested["fieldnames"]
-                if candidate not in selected and _field_exists(meta, candidate)
+                if candidate not in selected
+                and _field_exists(meta, candidate)
+                and (
+                    candidate in SYSTEM_FIELDS
+                    or not meta.get_field(candidate).hidden
+                )
             ),
             None,
         )
@@ -2034,7 +2810,13 @@ def _resolve_columns(meta, requested_columns):
 
         selected.add(fieldname)
         if fieldname in SYSTEM_FIELDS:
-            fieldtype = "Link" if fieldname in ("name", "owner", "modified_by") else "Datetime"
+            fieldtype = (
+                "Link"
+                if fieldname in ("name", "owner", "modified_by")
+                else "Int"
+                if fieldname == "docstatus"
+                else "Datetime"
+            )
             options = meta.name if fieldname == "name" else "User" if fieldname in ("owner", "modified_by") else None
         else:
             df = meta.get_field(fieldname)
@@ -2113,6 +2895,7 @@ def _get_open_workflow_actions():
         {
             "doctype": row.reference_doctype,
             "name": row.reference_name,
+            "route_key": _portal_route_key_for_doctype(row.reference_doctype),
             "status": row.status,
             "modified": row.modified,
         }
