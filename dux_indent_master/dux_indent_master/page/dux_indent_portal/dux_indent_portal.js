@@ -185,6 +185,7 @@ class DuxProcurementPortal {
 			if (action === "open-native") this.open_native_document($target.data("doctype"), $target.data("name"));
 			if (action === "previous") this.change_page(-1);
 			if (action === "next") this.change_page(1);
+			if (action === "run-report") this.run_report_filters();
 		});
 
 		this.$root.on("click", "[data-route-key]", (event) => {
@@ -350,8 +351,103 @@ class DuxProcurementPortal {
 			return;
 		}
 		if (item.kind === "report") {
-			frappe.set_route("query-report", item.report);
+			await this.open_report_view(key);
 		}
+	}
+
+	async open_report_view(key, reset = true) {
+		const item = this.items[key];
+		if (!item) return;
+		if (reset) {
+			const today = frappe.datetime.get_today();
+			this.state.start = 0;
+			if (!this.state.report_company) this.state.report_company = this.bootstrap.company || "";
+			if (!this.state.report_date) this.state.report_date = today;
+			if (!this.state.report_from_date) this.state.report_from_date = frappe.datetime.add_days(today, -90);
+			if (!this.state.report_to_date) this.state.report_to_date = today;
+		}
+		this.state.route_key = key;
+		this.state.view = "report";
+		this.set_active(key, item.label);
+		this.show_loading();
+		const filters = item.filter_kind === "as_of"
+			? { company: this.state.report_company, report_date: this.state.report_date }
+			: { company: this.state.report_company, from_date: this.state.report_from_date, to_date: this.state.report_to_date };
+		try {
+			const data = await this.call("dux_indent_master.portal.get_portal_report", {
+				route_key: key,
+				filters: JSON.stringify(filters),
+				start: this.state.start || 0,
+				page_length: this.bootstrap.page_length || 20,
+			});
+			this.current_list = data;
+			this.render_report_view(data, item);
+		} catch (error) {
+			this.show_error(error);
+		}
+	}
+
+	run_report_filters() {
+		if (this.report_company_control) this.state.report_company = this.report_company_control.get_value();
+		const $date = this.$content.find('[data-role="report-date"]');
+		if ($date.length) this.state.report_date = $date.val();
+		const $from = this.$content.find('[data-role="report-from-date"]');
+		if ($from.length) this.state.report_from_date = $from.val();
+		const $to = this.$content.find('[data-role="report-to-date"]');
+		if ($to.length) this.state.report_to_date = $to.val();
+		this.state.start = 0;
+		this.open_report_view(this.state.route_key, false);
+	}
+
+	make_report_filter_control($slot, df, value) {
+		if (!$slot.length) return null;
+		const control = frappe.ui.form.make_control({
+			df: { ...df, ignore_link_validation: true },
+			parent: $slot,
+			render_input: true,
+		});
+		control.set_value(value || "");
+		return control;
+	}
+
+	render_report_view(data, item) {
+		const filter_kind = (item && item.filter_kind) || data.filter_kind || "date_range";
+		const rows = (data.rows || []).map((row) => `
+			<tr>${(data.columns || []).map((column) => `<td>${this.format_value(row[column.fieldname], column, row)}</td>`).join("")}</tr>
+		`).join("");
+		const start = Number(data.start || 0);
+		const end = Math.min(start + (data.rows || []).length, Number(data.total || 0));
+		const can_previous = start > 0;
+		const can_next = end < Number(data.total || 0);
+		const date_controls = filter_kind === "as_of" ? `
+			<label class="duxp-filter-select">${this.icon("calendar", 13)}<input type="date" data-role="report-date" value="${this.escape(this.state.report_date)}" title="${__("Report Date")}"></label>
+		` : `
+			<label class="duxp-filter-select">${this.icon("calendar", 13)}<input type="date" data-role="report-from-date" value="${this.escape(this.state.report_from_date)}" title="${__("From Date")}"></label>
+			<label class="duxp-filter-select">${this.icon("calendar", 13)}<input type="date" data-role="report-to-date" value="${this.escape(this.state.report_to_date)}" title="${__("To Date")}"></label>
+		`;
+
+		this.$content.html(`
+			<section class="duxp-page-head">
+				<div><h1>${this.escape(data.label)}</h1><p>${this.escape(data.description)}</p></div>
+			</section>
+			<section class="duxp-card">
+				<div class="duxp-filter-bar">
+					<div class="duxp-form-control duxp-report-filter" data-fieldname="report-company"></div>
+					${date_controls}
+					<button class="duxp-btn duxp-btn-secondary" data-action="run-report">${this.icon("refresh", 14)}${__("Apply")}</button>
+				</div>
+				<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr>${(data.columns || []).map((column) => `<th>${this.escape(column.label)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${(data.columns || []).length || 1}">${this.empty_state(__("No data"), __("Try changing the filters."))}</td></tr>`}</tbody></table></div>
+				<div class="duxp-pager"><span>${__("Showing")} ${data.total ? start + 1 : 0}–${end} ${__("of")} ${data.total || 0}</span><div><button data-action="previous" ${can_previous ? "" : "disabled"}>${this.icon("back", 14)}</button><button data-action="next" ${can_next ? "" : "disabled"}>${this.icon("forward", 14)}</button></div></div>
+			</section>
+		`);
+
+		const $company_slot = this.$content.find('[data-fieldname="report-company"]');
+		this.report_company_control = this.make_report_filter_control($company_slot, {
+			fieldname: "company",
+			label: "",
+			fieldtype: "Link",
+			options: "Company",
+		}, this.state.report_company);
 	}
 
 	async open_dashboard() {
@@ -1976,12 +2072,14 @@ class DuxProcurementPortal {
 		if (!this.current_list) return;
 		const page_length = Number(this.current_list.page_length || 20);
 		this.state.start = Math.max(0, Number(this.state.start || 0) + direction * page_length);
-		this.open_document_list(this.state.route_key, true);
+		if (this.state.view === "report") this.open_report_view(this.state.route_key, false);
+		else this.open_document_list(this.state.route_key, true);
 	}
 
 	refresh_current() {
 		if (this.state.view === "form") this.open_document_form(this.state.route_key, this.state.document_name);
 		else if (this.state.view === "detail") this.open_document_detail(this.state.route_key, this.state.document_name);
+		else if (this.state.view === "report") this.open_report_view(this.state.route_key, false);
 		else if (this.state.route_key === "dashboard") this.open_dashboard();
 		else this.open_document_list(this.state.route_key, true);
 	}

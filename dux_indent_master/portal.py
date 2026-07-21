@@ -590,6 +590,7 @@ LINK_CONFIG = {
         "kind": "report",
         "report": "Accounts Payable",
         "ref_doctype": "Purchase Invoice",
+        "filter_kind": "as_of",
     },
     "purchase_register": {
         "label": "Purchase Register",
@@ -598,6 +599,7 @@ LINK_CONFIG = {
         "kind": "report",
         "report": "Purchase Register",
         "ref_doctype": "Purchase Invoice",
+        "filter_kind": "date_range",
     },
     "itemwise_purchase_register": {
         "label": "Item-wise Purchase Register",
@@ -606,6 +608,7 @@ LINK_CONFIG = {
         "kind": "report",
         "report": "Item-wise Purchase Register",
         "ref_doctype": "Purchase Invoice",
+        "filter_kind": "date_range",
     },
 }
 
@@ -1049,6 +1052,42 @@ def get_document_list(
         "can_create": bool(
             config.get("allow_create", True) and frappe.has_permission(doctype, ptype="create")
         ),
+    }
+
+
+@frappe.whitelist()
+def get_portal_report(route_key, filters=None, start=0, page_length=20):
+    """Run a native Script Report and return a portal-styled page of results."""
+    _require_authenticated_user()
+    link_config = LINK_CONFIG.get(route_key)
+    if not link_config or link_config.get("kind") != "report":
+        frappe.throw(_("This report is not available."), frappe.PermissionError)
+
+    report_name = link_config["report"]
+    ref_doctype = link_config.get("ref_doctype")
+    if ref_doctype and not frappe.has_permission(ref_doctype, ptype="report"):
+        frappe.throw(_("You do not have permission to view this report."), frappe.PermissionError)
+
+    filters = frappe.parse_json(filters) if isinstance(filters, str) else (filters or {})
+
+    from frappe.desk.query_report import run as run_report
+
+    result = run_report(report_name, filters=filters)
+    all_rows = result.get("result") or []
+    start = max(cint(start), 0)
+    page_length = min(max(cint(page_length) or 20, 1), MAX_PAGE_LENGTH)
+
+    return {
+        "key": route_key,
+        "label": _(link_config["label"]),
+        "description": _(link_config.get("description") or ""),
+        "filter_kind": link_config.get("filter_kind") or "date_range",
+        "report": report_name,
+        "columns": result.get("columns") or [],
+        "rows": all_rows[start : start + page_length],
+        "total": len(all_rows),
+        "start": start,
+        "page_length": page_length,
     }
 
 

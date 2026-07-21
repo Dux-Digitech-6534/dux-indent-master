@@ -758,6 +758,22 @@ body.dux-portal-active .duxp-root {
 	font-size: 12.5px;
 }
 
+.duxp-report-filter {
+	width: 220px;
+}
+
+.duxp-report-filter .form-control,
+.duxp-report-filter input {
+	height: 36px;
+	border-radius: 9px;
+	border: 1px solid var(--duxp-border-strong);
+	background: var(--duxp-surface-3);
+	color: var(--duxp-text);
+	font-size: 12.5px;
+	padding: 0 10px;
+	width: 100%;
+}
+
 .duxp-table-wrap {
 	width: 100%;
 	overflow-x: auto;
