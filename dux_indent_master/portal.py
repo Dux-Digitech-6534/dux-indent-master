@@ -663,16 +663,16 @@ FORM_CONFIG = {
     },
     "purchase_order": {
         "sections": [
-            {"label": "Supplier & Schedule", "fields": ["naming_series", "supplier", "transaction_date", "schedule_date", "company", "supplier_warehouse", "set_warehouse"]},
-            {"label": "Discount", "position": "after_tables", "fields": ["apply_discount_on", "additional_discount_percentage", "discount_amount"]},
+            {"label": "Supplier & Schedule", "fields": ["naming_series", "supplier", "transaction_date", "schedule_date", "company", "supplier_warehouse", "set_warehouse", "custom_sap_po_no", "custom_sap_remarks"]},
+            {"label": "Taxes and Charges", "fields": ["taxes_and_charges"]},
+            {"label": "Totals", "position": "after_tables", "fields": ["grand_total", "in_words", "rounding_adjustment", "rounded_total", "advance_paid"]},
             {"label": "Supplier Address, Billing & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "billing_address", "billing_address_display", "contact_person", "contact_display", "contact_mobile", "contact_email", "place_of_supply"]},
             {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display"]},
-            {"label": "Terms", "fields": ["payment_terms_template", "tc_name"]},
         ],
         "tables": [
             {
                 "fieldname": "items",
-                "fields": ["item_code", "schedule_date", "qty", "uom", "conversion_factor", "warehouse", "rate", "amount", "description"],
+                "fields": ["item_code", "schedule_date", "qty", "uom", "conversion_factor", "rate", "amount", "description"],
                 "field_overrides": {"amount": {"force_read_only": True}},
             },
             {"fieldname": "taxes", "fields": ["category", "add_deduct_tax", "charge_type", "account_head", "description", "rate", "tax_amount"]},
