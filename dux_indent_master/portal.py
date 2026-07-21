@@ -2400,14 +2400,14 @@ def create_material_request_from_portal_indent(name, selected_items):
         for row in _document_operational_actions("dux_indent_master", doc)
     ):
         frappe.throw(_("Material Purchase is not available for this indent."), frappe.PermissionError)
-    allowed = {row.name: max(flt(row.qty) - flt(row.get("purchase_qty")), 0) for row in doc.get("items") or []}
+    allowed = {row.name for row in doc.get("items") or []}
     selected_items = frappe.parse_json(selected_items) if isinstance(selected_items, str) else selected_items
     cleaned = []
     for row in selected_items or []:
         row_name = row.get("item_row")
         qty = flt(row.get("qty"))
-        if row_name not in allowed or qty <= 0 or qty > allowed[row_name]:
-            frappe.throw(_("Purchase quantity must be within the available balance."))
+        if row_name not in allowed or qty <= 0:
+            frappe.throw(_("Purchase quantity must be greater than zero for a valid indent item."))
         cleaned.append({"item_row": row_name, "qty": qty})
     if not cleaned:
         frappe.throw(_("Select at least one item with a purchase quantity."))

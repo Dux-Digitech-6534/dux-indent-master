@@ -937,24 +937,22 @@ class DuxProcurementPortal {
 			const data = await this.call("dux_indent_master.portal.get_dux_indent_action_data", { name });
 			const available = (data.items || []).filter((row) => Number(row.balance_qty || 0) > 0);
 			if (!available.length) return frappe.msgprint(__("No purchase balance is available."));
-			const rows = available.map((row) => `<tr data-row-name="${this.escape(row.row_name)}" data-balance="${this.escape(row.balance_qty)}">
-				<td>${this.escape(row.item_code)}</td><td>${this.escape(format_number(row.required_qty))}</td>
-				<td>${this.escape(format_number(row.purchased_qty))}</td><td>${this.escape(format_number(row.balance_qty))}</td>
-				<td><input class="form-control duxp-indent-purchase-qty" type="number" min="0" max="${this.escape(row.balance_qty)}" step="any" value="${this.escape(row.balance_qty)}"></td></tr>`).join("");
+			const rows = available.map((row) => `<tr data-row-name="${this.escape(row.row_name)}">
+				<td>${this.escape(row.item_code)}</td>
+				<td><input class="form-control duxp-indent-purchase-qty" type="number" min="0" step="any" value="${this.escape(row.balance_qty)}"></td></tr>`).join("");
 			const dialog = new frappe.ui.Dialog({
 				title: __("Material Purchase"),
-				fields: [{ fieldname: "items_html", fieldtype: "HTML", options: `<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr><th>${__("Item")}</th><th>${__("Required")}</th><th>${__("Purchased")}</th><th>${__("Balance")}</th><th>${__("Purchase Qty")}</th></tr></thead><tbody>${rows}</tbody></table></div>` }],
+				fields: [{ fieldname: "items_html", fieldtype: "HTML", options: `<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr><th>${__("Item")}</th><th>${__("Purchase Qty")}</th></tr></thead><tbody>${rows}</tbody></table></div>` }],
 				primary_action_label: __("Create Material Request"),
 				primary_action: async () => {
 					const selected = [];
 					let invalid_quantity = false;
 					dialog.$wrapper.find("tr[data-row-name]").each((index, element) => {
 						const qty = Number($(element).find(".duxp-indent-purchase-qty").val() || 0);
-						const balance = Number($(element).data("balance") || 0);
-						if (qty < 0 || qty > balance) invalid_quantity = true;
+						if (qty < 0) invalid_quantity = true;
 						if (qty > 0) selected.push({ item_row: $(element).data("row-name"), qty });
 					});
-					if (invalid_quantity) return frappe.msgprint(__("Purchase Qty cannot exceed the available balance."));
+					if (invalid_quantity) return frappe.msgprint(__("Purchase Qty cannot be negative."));
 					if (!selected.length) return frappe.msgprint(__("Enter purchase quantity for at least one item."));
 					const result = await this.call("dux_indent_master.portal.create_material_request_from_portal_indent", {
 						name, selected_items: JSON.stringify(selected),
