@@ -448,6 +448,7 @@ DOCUMENT_CONFIG = {
         "doctype": "Dux Indent Master",
         "icon": "clipboard",
         "description": "Indent planning, procurement progress, stock and delivery tracking.",
+        "show_hidden_columns": ["status"],
         "columns": [
             _column("Indent ID", "name"),
             _column("Transaction Date", "transaction_date"),
@@ -986,7 +987,7 @@ def get_document_list(
     _require_doctype_permission(doctype, "read")
 
     meta = frappe.get_meta(doctype)
-    columns = _resolve_columns(meta, config["columns"])
+    columns = _resolve_columns(meta, config["columns"], allow_hidden=set(config.get("show_hidden_columns") or []))
     fields = _unique([column["fieldname"] for column in columns] + ["name", "docstatus", "modified"])
     filters = deepcopy(config.get("default_filters") or {})
 
@@ -1605,7 +1606,7 @@ def get_document_detail(route_key, name):
                 configured_detail_fields.add(fieldname)
 
     fields = []
-    for column in _resolve_columns(meta, detail_columns):
+    for column in _resolve_columns(meta, detail_columns, allow_hidden=set(config.get("show_hidden_columns") or [])):
         value = (
             _docstatus_label(doc.docstatus)
             if column["fieldname"] == "docstatus"
