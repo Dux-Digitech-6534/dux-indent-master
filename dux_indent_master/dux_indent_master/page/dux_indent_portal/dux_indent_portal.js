@@ -93,7 +93,7 @@ class DuxProcurementPortal {
 				<div class="duxp-sidebar-backdrop" data-action="close-sidebar"></div>
 				<aside class="duxp-sidebar">
 					<div class="duxp-brand">
-						<img class="duxp-brand-logo" src="/files/dux-logo.png" alt="Dux Digitech">
+						<img class="duxp-brand-logo" src="/private/files/dux-logo.png" alt="Dux Digitech">
 					</div>
 					<div class="duxp-nav-search">
 						${this.icon("search", 15)}
@@ -410,6 +410,14 @@ class DuxProcurementPortal {
 		Object.entries(this.report_filter_controls || {}).forEach(([fieldname, control]) => {
 			if (control) values[fieldname] = control.get_value();
 		});
+		const previous_values = this.state.report_values[this.state.route_key] || {};
+		const fieldnames = new Set([...Object.keys(previous_values), ...Object.keys(values)]);
+		const filters_unchanged = [...fieldnames].every((fieldname) => {
+			const previous = previous_values[fieldname] ?? "";
+			const current = values[fieldname] ?? "";
+			return JSON.stringify(previous) === JSON.stringify(current);
+		});
+		if (filters_unchanged) return;
 		this.state.report_values[this.state.route_key] = values;
 		this.state.start = 0;
 		this.open_report_view(this.state.route_key, false);
@@ -441,43 +449,98 @@ class DuxProcurementPortal {
 	}
 
 	render_report_view(data, filter_defs) {
+		clearTimeout(this.report_filter_timer);
+		this.$content.off(".duxReportFilters");
+		this.report_filters_ready = false;
 		const SKIP_FIELDTYPES = ["Section Break", "Column Break", "Tab Break", "HTML", "Button"];
 		const visible_filters = (filter_defs || []).filter((f) => f.fieldname && !f.hidden && !SKIP_FIELDTYPES.includes(f.fieldtype));
-		const filter_items_html = visible_filters.map((f) => `
-			<div class="duxp-report-filter-item">
-				<span class="duxp-report-filter-label">${this.escape(f.label || f.fieldname)}</span>
+		const values = this.state.report_values[data.key] || {};
+		const active_filter_count = Object.values(values).filter((value) => {
+			if (Array.isArray(value)) return value.length > 0;
+			return value !== null && value !== undefined && value !== "" && value !== false;
+		}).length;
+		const filter_items_html = visible_filters.map((f) => {
+			const is_check = f.fieldtype === "Check";
+			return `
+			<div class="duxp-report-filter-item ${is_check ? "is-check" : ""}">
+				${is_check ? "" : `<span class="duxp-report-filter-label">${this.escape(f.label || f.fieldname)}</span>`}
 				<div class="duxp-form-control" data-report-fieldname="${this.escape(f.fieldname)}"></div>
 			</div>
-		`).join("");
+		`; }).join("");
 
 		const rows = (data.rows || []).map((row) => `
-			<tr>${(data.columns || []).map((column) => `<td>${this.format_value(row[column.fieldname], column, row)}</td>`).join("")}</tr>
+			<tr>${(data.columns || []).map((column) => {
+				const numeric = ["Currency", "Float", "Int", "Percent"].includes(column.fieldtype);
+				return `<td class="${numeric ? "duxp-report-number-cell" : ""}">${this.format_value(row[column.fieldname], column, row)}</td>`;
+			}).join("")}</tr>
 		`).join("");
 		const start = Number(data.start || 0);
 		const end = Math.min(start + (data.rows || []).length, Number(data.total || 0));
 		const can_previous = start > 0;
 		const can_next = end < Number(data.total || 0);
+		const range_label = `${data.total ? start + 1 : 0}–${end}`;
 
 		this.$content.html(`
-			<section class="duxp-page-head">
-				<div><h1>${this.escape(data.label)}</h1><p>${this.escape(data.description)}</p></div>
-			</section>
-			<section class="duxp-card">
-				<div class="duxp-filter-bar duxp-report-filter-bar">
-					${filter_items_html}
-					<button class="duxp-btn duxp-btn-primary" data-action="run-report">${this.icon("refresh", 14)}${__("Apply")}</button>
+			<section class="duxp-report-hero">
+				<div class="duxp-report-hero-icon">${this.icon("chart", 22)}</div>
+				<div class="duxp-report-hero-copy">
+					<span>${__("Procurement Analytics")}</span>
+					<h1>${this.escape(data.label)}</h1>
+					<p>${this.escape(data.description)}</p>
 				</div>
-				<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr>${(data.columns || []).map((column) => `<th>${this.escape(column.label)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${(data.columns || []).length || 1}">${this.empty_state(__("No data"), __("Try changing the filters."))}</td></tr>`}</tbody></table></div>
-				<div class="duxp-pager"><span>${__("Showing")} ${data.total ? start + 1 : 0}–${end} ${__("of")} ${data.total || 0}</span><div><button data-action="previous" ${can_previous ? "" : "disabled"}>${this.icon("back", 14)}</button><button data-action="next" ${can_next ? "" : "disabled"}>${this.icon("forward", 14)}</button></div></div>
+				<div class="duxp-report-hero-meta">
+					<span class="duxp-report-live"><i></i>${__("Live Report")}</span>
+					<strong>${this.escape(data.total || 0)}</strong>
+					<small>${__("Total records")}</small>
+				</div>
+			</section>
+			<section class="duxp-card duxp-report-filter-card">
+				<header class="duxp-report-filter-header">
+					<div class="duxp-report-section-title">
+						<span>${this.icon("filter", 16)}</span>
+						<div><h2>${__("Report Filters")}</h2><p>${__("Refine the report using the criteria below.")}</p></div>
+					</div>
+					<div class="duxp-report-filter-actions">
+						<span>${active_filter_count} ${active_filter_count === 1 ? __("filter active") : __("filters active")}</span>
+					</div>
+				</header>
+				<div class="duxp-report-filter-grid">
+					${filter_items_html}
+				</div>
+			</section>
+			<section class="duxp-card duxp-report-results-card">
+				<div class="duxp-report-results-header">
+					<div class="duxp-report-section-title">
+						<span>${this.icon("document", 16)}</span>
+						<div><h2>${__("Report Results")}</h2><p>${__("Results based on the current filter selection.")}</p></div>
+					</div>
+					<span class="duxp-report-range">${range_label} ${__("of")} ${this.escape(data.total || 0)}</span>
+				</div>
+				<div class="duxp-table-wrap duxp-report-table-frame"><table class="duxp-table duxp-report-table"><thead><tr>${(data.columns || []).map((column) => `<th class="${["Currency", "Float", "Int", "Percent"].includes(column.fieldtype) ? "duxp-report-number-cell" : ""}">${this.escape(column.label)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${(data.columns || []).length || 1}">${this.empty_state(__("No data"), __("Try changing the filters."))}</td></tr>`}</tbody></table></div>
+				<div class="duxp-pager duxp-report-pager"><span>${__("Showing")} ${range_label} ${__("of")} ${data.total || 0}</span><div><button data-action="previous" ${can_previous ? "" : "disabled"}>${this.icon("back", 14)}</button><button data-action="next" ${can_next ? "" : "disabled"}>${this.icon("forward", 14)}</button></div></div>
 			</section>
 		`);
 
 		this.report_filter_controls = {};
-		const values = this.state.report_values[data.key] || {};
 		visible_filters.forEach((f) => {
 			const $slot = this.$content.find(`[data-report-fieldname="${this.escape(f.fieldname)}"]`);
 			const control = this.make_report_filter_control($slot, f, values[f.fieldname]);
 			if (control) this.report_filter_controls[f.fieldname] = control;
+		});
+
+		this.$content.on(
+			"change.duxReportFilters awesomplete-selectcomplete.duxReportFilters",
+			"[data-report-fieldname] input, [data-report-fieldname] select",
+			() => {
+				if (!this.report_filters_ready) return;
+				clearTimeout(this.report_filter_timer);
+				this.report_filter_timer = setTimeout(() => this.run_report_filters(), 350);
+			}
+		);
+		window.requestAnimationFrame(() => {
+			if (this.state.view === "report" && this.state.route_key === data.key) {
+				this.report_filters_ready = true;
+			}
 		});
 	}
 
@@ -612,7 +675,7 @@ class DuxProcurementPortal {
 			<section class="duxp-card duxp-detail-panel">
 				${this.panel_header(table_index + 2, table.label, `${(table.rows || []).length} ${__("rows")}`)}
 				<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr>${selectable ? `<th><input type="checkbox" data-role="indent-stock-all" aria-label="${__("Select all")}"></th>` : ""}<th>#</th>${(table.columns || []).map((column) => `<th>${this.escape(column.label)}</th>`).join("")}</tr></thead><tbody>
-					${(table.rows || []).map((row, index) => `<tr>${selectable ? `<td><input type="checkbox" data-role="indent-stock-row" value="${this.escape(row._row_name || "")}"></td>` : ""}<td class="duxp-index">${index + 1}</td>${table.columns.map((column) => `<td>${this.format_value(row[column.fieldname], column, row)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${(table.columns || []).length + 1 + (selectable ? 1 : 0)}">${this.empty_state(__("No rows"), "")}</td></tr>`}
+					${(table.rows || []).map((row, index) => `<tr>${selectable ? `<td><input type="checkbox" data-role="indent-stock-row" value="${this.escape(row._row_name || "")}"></td>` : ""}<td class="duxp-index">${index + 1}</td>${table.columns.map((column) => `<td>${this.format_child_table_value(data, table, row, column)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${(table.columns || []).length + 1 + (selectable ? 1 : 0)}">${this.empty_state(__("No rows"), "")}</td></tr>`}
 				</tbody></table></div>
 			</section>
 		`; }).join("");
@@ -706,6 +769,24 @@ class DuxProcurementPortal {
 			</div>
 		`);
 		this.update_indent_stock_action_visibility();
+	}
+
+	format_child_table_value(data, table, row, column) {
+		const indent_links = {
+			"material_purchase.material_purchase_id": "material_request",
+			"delivery_challans.delivery_challan_id": "delivery_challan",
+		};
+		const route_key = data.key === "dux_indent_master"
+			? indent_links[`${table.fieldname}.${column.fieldname}`]
+			: null;
+		const value = row[column.fieldname];
+		if (route_key && value) {
+			return `<button type="button" class="duxp-link-button" data-action="open-linked-document"
+				data-key="${this.escape(route_key)}" data-name="${this.escape(value)}">
+				${this.icon("eye", 13)}${this.escape(value)}
+			</button>`;
+		}
+		return this.format_value(value, column, row);
 	}
 
 	update_indent_stock_action_visibility() {
@@ -1068,7 +1149,7 @@ class DuxProcurementPortal {
 				<td>${this.escape(row.item_code)}</td>
 				<td><input class="form-control duxp-indent-purchase-qty" type="number" min="0" step="any" value="${this.escape(row.balance_qty)}"></td></tr>`).join("");
 			const dialog = new frappe.ui.Dialog({
-				title: __("Material Purchase"),
+				title: __("Material Request"),
 				fields: [{ fieldname: "items_html", fieldtype: "HTML", options: `<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr><th>${__("Item")}</th><th>${__("Purchase Qty")}</th></tr></thead><tbody>${rows}</tbody></table></div>` }],
 				primary_action_label: __("Create Material Request"),
 				primary_action: async () => {
@@ -1090,16 +1171,56 @@ class DuxProcurementPortal {
 			});
 			dialog.show();
 		} catch (error) {
-			this.show_action_error(error, __("Material Purchase Failed"));
+			this.show_action_error(error, __("Material Request Failed"));
 		}
 	}
 
 	async create_indent_delivery_challan(name) {
 		try {
-			const result = await this.call("dux_indent_master.portal.create_delivery_challan_from_portal_indent", { name });
-			const document_name = result.name || result.delivery_challan;
-			if (!document_name) throw new Error(__("Delivery Challan was not returned."));
-			await this.open_document_detail("delivery_challan", document_name);
+			const data = await this.call("dux_indent_master.portal.get_dux_indent_delivery_action_data", { name });
+			const balance_items = (data.items || []).filter((row) => Number(row.balance_qty || 0) > 0);
+			if (!balance_items.length) return frappe.msgprint(__("No delivery balance quantity is available."));
+			const rows = balance_items.map((row) => `<tr data-row-name="${this.escape(row.row_name)}" data-max-qty="${this.escape(row.max_qty)}">
+				<td>${this.escape(row.item_name)}</td>
+				<td><input class="form-control duxp-indent-delivery-qty" type="number" min="0" max="${this.escape(row.max_qty)}" step="any" value="${this.escape(row.max_qty)}"></td>
+			</tr>`).join("");
+			const dialog = new frappe.ui.Dialog({
+				title: __("Create Delivery Challan"),
+				fields: [{
+					fieldname: "items_html",
+					fieldtype: "HTML",
+					options: `<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr><th>${__("Item Name")}</th><th>${__("DC Qty")}</th></tr></thead><tbody>${rows}</tbody></table></div>`,
+				}],
+				primary_action_label: __("Create Delivery Challan"),
+				primary_action: async () => {
+					const selected = [];
+					let invalid_quantity = false;
+					dialog.$wrapper.find("tr[data-row-name]").each((index, element) => {
+						const qty = Number($(element).find(".duxp-indent-delivery-qty").val() || 0);
+						const max_qty = Number($(element).data("max-qty") || 0);
+						if (qty < 0 || qty > max_qty) invalid_quantity = true;
+						if (qty > 0) selected.push({ item_row: $(element).data("row-name"), qty });
+					});
+					if (invalid_quantity) {
+						return frappe.msgprint(__("DC Qty cannot exceed the indent quantity."));
+					}
+					if (!selected.length) return frappe.msgprint(__("Enter DC Qty for at least one item."));
+					dialog.get_primary_btn().prop("disabled", true);
+					try {
+						const result = await this.call("dux_indent_master.portal.create_delivery_challan_from_portal_indent", {
+							name, selected_items: JSON.stringify(selected),
+						});
+						const document_name = result.name || result.delivery_challan;
+						if (!document_name) throw new Error(__("Delivery Challan was not returned."));
+						dialog.hide();
+						await this.open_document_detail("delivery_challan", document_name);
+					} catch (error) {
+						dialog.get_primary_btn().prop("disabled", false);
+						this.show_action_error(error, __("Delivery Challan Creation Failed"));
+					}
+				},
+			});
+			dialog.show();
 		} catch (error) {
 			this.show_action_error(error, __("Delivery Challan Creation Failed"));
 		}
@@ -1478,6 +1599,10 @@ class DuxProcurementPortal {
 	apply_control_dependencies(control, field, doc, parent) {
 		if (!control) return;
 		const visible = this.evaluate_dependency(field.depends_on, doc, parent);
+		if (this.form_data && this.form_data.key === "material_request" && control.$wrapper) {
+			const $field_slot = control.$wrapper.closest(".duxp-form-control").not(".duxp-table-control");
+			if ($field_slot.length) $field_slot.toggle(visible);
+		}
 		const required = Boolean(field.reqd || (
 			field.mandatory_depends_on
 			&& this.evaluate_dependency(field.mandatory_depends_on, doc, parent)
@@ -2169,6 +2294,9 @@ class DuxProcurementPortal {
 		if (value === null || value === undefined || value === "") return '<span class="duxp-muted">—</span>';
 		if (["status", "row_status", "docstatus"].includes(column.fieldname)) return this.status_tag(value);
 		if (column.fieldname === "disabled") return this.status_tag(Number(value) ? __("Disabled") : __("Active"));
+		if (typeof value === "string" && /address/i.test(column.fieldname || "") && /<[^>]+>/.test(value)) {
+			return this.format_address_value(value);
+		}
 		if (column.fieldtype === "Check") return Number(value) ? __("Yes") : __("No");
 		if (column.fieldtype === "Date") return this.format_date(value);
 		if (column.fieldtype === "Datetime") return this.format_datetime(value);
@@ -2181,6 +2309,16 @@ class DuxProcurementPortal {
 				: this.escape(value);
 		}
 		return this.escape(value);
+	}
+
+	format_address_value(value) {
+		const normalized = String(value || "")
+			.replace(/<br\s*\/?>/gi, "\n")
+			.replace(/<\/(?:p|div)>/gi, "\n")
+			.replace(/<[^>]+>/g, "");
+		const decoder = document.createElement("textarea");
+		decoder.innerHTML = normalized;
+		return this.escape(decoder.value.trim()).replace(/\r?\n/g, "<br>");
 	}
 
 	safe_attachment_url(value) {

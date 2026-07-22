@@ -121,11 +121,9 @@ DOCUMENT_CONFIG = {
                     _column("Item Name", "item_name"),
                     _column("Quantity", "qty"),
                     _column("UOM", "uom"),
-                    _column("Warehouse", "warehouse"),
                     _column("Required Date", "schedule_date"),
                     _column("Specification", "custom_dux_indent_specification", "description"),
                 ],
-                "show_hidden": ["warehouse"],
             }
         ],
         "date_field": "transaction_date",
@@ -487,8 +485,6 @@ DOCUMENT_CONFIG = {
                     _column("MR Qty", "material_request_qty", "purchase_qty"),
                     _column("Ordered Qty", "ordered_qty"),
                     _column("Received Qty", "received_qty"),
-                    _column("DC Qty", "delivery_challan_qty"),
-                    _column("DC Balance", "delivery_balance_qty"),
                     _column("Specification", "specification"),
                 ],
             },
@@ -627,15 +623,13 @@ FORM_CONFIG = {
                     "transaction_date",
                     "schedule_date",
                     "company",
-                    "buying_price_list",
-                    "set_warehouse",
                     "set_from_warehouse",
                     "custom_dux_indent_remark",
                 ],
                 "field_overrides": {
+                    "material_request_type": {"force_read_only": True},
                     "schedule_date": {"min_date_field": "transaction_date"},
                     "custom_dux_indent_remark": {"label": "Remark", "force_editable": True},
-                    "set_warehouse": {"label": "Set Warehouse"},
                 },
             },
             {
@@ -692,7 +686,7 @@ FORM_CONFIG = {
     },
     "purchase_receipt": {
         "sections": [
-            {"label": "Supplier & Posting", "fields": ["naming_series", "supplier", "supplier_delivery_note", "purchase_order", "posting_date", "posting_time", "set_posting_time", "company", "set_warehouse", "rejected_warehouse", "is_return"]},
+            {"label": "Supplier & Posting", "fields": ["naming_series", "supplier", "supplier_delivery_note", "purchase_order", "posting_date", "posting_time", "company", "set_warehouse", "rejected_warehouse"]},
             {"label": "Supplier Address, Billing & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "billing_address", "billing_address_display", "contact_person", "contact_display", "contact_mobile", "contact_email", "place_of_supply"]},
             {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display"]},
         ],
@@ -717,7 +711,6 @@ FORM_CONFIG = {
     "stock_entry": {
         "sections": [
             {"label": "Stock Movement", "fields": ["naming_series", "stock_entry_type", "company", "posting_date", "posting_time", "set_posting_time"]},
-            {"label": "BOM Info", "fields": ["from_bom"]},
             {"label": "Default Warehouse", "fields": ["from_warehouse", "to_warehouse"]},
         ],
         "tables": [
@@ -842,7 +835,7 @@ MENU_GROUPS = [
             "dux_indent_master",
         ],
     },
-    {"label": "Masters & Settings", "items": ["supplier", "item", "buying_settings"]},
+    {"label": "Masters & Settings", "items": ["supplier", "item"]},
     {
         "label": "Reports",
         "items": ["accounts_payable", "purchase_register", "itemwise_purchase_register"],
@@ -990,13 +983,36 @@ def get_document_list(
     _require_doctype_permission(doctype, "read")
 
     meta = frappe.get_meta(doctype)
-    columns = _resolve_columns(meta, config["columns"], allow_hidden=set(config.get("show_hidden_columns") or []))
+    status_field = (
+        "status"
+        if _field_exists(meta, "status")
+        else "docstatus"
+        if meta.is_submittable
+        else None
+    )
+    visible_hidden_columns = set(config.get("show_hidden_columns") or [])
+    if status_field:
+        visible_hidden_columns.add(status_field)
+    columns = _resolve_columns(meta, config["columns"], allow_hidden=visible_hidden_columns)
+    if status_field and not any(column["fieldname"] == status_field for column in columns):
+        columns.extend(
+            _resolve_columns(
+                meta,
+                [_column("Status", status_field)],
+                allow_hidden=visible_hidden_columns,
+            )
+        )
     fields = _unique([column["fieldname"] for column in columns] + ["name", "docstatus", "modified"])
     filters = deepcopy(config.get("default_filters") or {})
 
-    status_field = "status" if _field_exists(meta, "status") else None
     if status and status != "All" and status_field:
-        filters[status_field] = status
+        if status_field == "docstatus":
+            docstatus_by_label = {"Draft": 0, "Submitted": 1, "Cancelled": 2}
+            if status not in docstatus_by_label:
+                frappe.throw(_("Invalid status filter."))
+            filters[status_field] = docstatus_by_label[status]
+        else:
+            filters[status_field] = status
 
     date_field = config.get("date_field")
     if date_field and _field_exists(meta, date_field):
@@ -1033,7 +1049,9 @@ def get_document_list(
             row.docstatus = _docstatus_label(row.docstatus)
 
     status_options = []
-    if status_field:
+    if status_field == "docstatus":
+        status_options = ["Draft", "Submitted", "Cancelled"]
+    elif status_field:
         status_df = meta.get_field(status_field)
         if status_df and status_df.options:
             status_options = [option for option in status_df.options.splitlines() if option]
@@ -1399,7 +1417,7 @@ def _document_operational_actions(route_key, doc):
                 not doc.get("material_purchase")
                 and frappe.has_permission("Material Request", ptype="create")
             ):
-                actions.append({"action": "indent_material_purchase", "label": _("Material Purchase"), "style": "primary"})
+                actions.append({"action": "indent_material_purchase", "label": _("Material Request"), "style": "primary"})
             if frappe.has_permission("Delivery Challan", ptype="create"):
                 actions.append({"action": "indent_delivery_challan", "label": _("Delivery Challan"), "style": "primary"})
 
@@ -1655,6 +1673,21 @@ def get_document_detail(route_key, name):
             fields.append({**column, "value": value})
 
     child_tables = []
+    live_indent_stock = {}
+    if route_key == "dux_indent_master":
+        for indent_row in doc.get("items") or []:
+            warehouse = indent_row.get("warehouse") or indent_row.get("source_warehouse")
+            stock_key = (indent_row.get("item_code"), warehouse)
+            if not all(stock_key) or stock_key in live_indent_stock:
+                continue
+            live_indent_stock[stock_key] = flt(
+                frappe.db.get_value(
+                    "Bin",
+                    {"item_code": stock_key[0], "warehouse": stock_key[1]},
+                    "actual_qty",
+                )
+            )
+
     table_configs = deepcopy(config.get("child_tables") or [])
     configured_tables = {table.get("fieldname") for table in table_configs}
     for form_table in (_get_form_config(route_key).get("tables") or []):
@@ -1687,10 +1720,19 @@ def get_document_detail(route_key, name):
         )
         child_rows = []
         for row in doc.get(table_config["fieldname"]) or []:
+            row_values = {
+                column["fieldname"]: row.get(column["fieldname"])
+                for column in child_columns
+            }
+            if route_key == "dux_indent_master" and table_config["fieldname"] == "items":
+                warehouse = row.get("warehouse") or row.get("source_warehouse")
+                stock_key = (row.get("item_code"), warehouse)
+                if "stock_qty" in row_values and all(stock_key):
+                    row_values["stock_qty"] = live_indent_stock.get(stock_key, 0)
             child_rows.append(
                 {
                     "_row_name": row.name,
-                    **{column["fieldname"]: row.get(column["fieldname"]) for column in child_columns},
+                    **row_values,
                 }
             )
 
@@ -1781,7 +1823,9 @@ def get_document_form(route_key, name=None):
             frappe.throw(_("New documents are not available for this portal view."), frappe.PermissionError)
         _require_doctype_permission(doctype, "create")
         doc = frappe.new_doc(doctype)
-        if doctype == "Dux Indent Master":
+        if route_key == "material_request":
+            doc.material_request_type = "Purchase"
+        elif doctype == "Dux Indent Master":
             details = _get_logged_in_user_details()
             if doc.meta.has_field("user_name"):
                 doc.user_name = details.get("user")
@@ -2090,6 +2134,8 @@ def save_portal_document(route_key, values, name=None, mapping_token=None):
         preserve_row_order=bool(mapping_token and not name),
         submitted_update=bool(name and doc.docstatus == 1),
     )
+    if is_new and route_key == "material_request":
+        doc.material_request_type = "Purchase"
     if doc.docstatus == 0:
         _prepare_portal_document(doc)
 
@@ -2492,7 +2538,7 @@ def get_dux_indent_action_data(name):
         row["action"] == "indent_material_purchase"
         for row in _document_operational_actions("dux_indent_master", doc)
     ):
-        frappe.throw(_("Material Purchase is not available for this indent."), frappe.PermissionError)
+        frappe.throw(_("Material Request is not available for this indent."), frappe.PermissionError)
     return {
         "name": doc.name,
         "company": doc.get("company_name"),
@@ -2519,7 +2565,7 @@ def create_material_request_from_portal_indent(name, selected_items):
         row["action"] == "indent_material_purchase"
         for row in _document_operational_actions("dux_indent_master", doc)
     ):
-        frappe.throw(_("Material Purchase is not available for this indent."), frappe.PermissionError)
+        frappe.throw(_("Material Request is not available for this indent."), frappe.PermissionError)
     allowed = {row.name for row in doc.get("items") or []}
     selected_items = frappe.parse_json(selected_items) if isinstance(selected_items, str) else selected_items
     cleaned = []
@@ -2536,7 +2582,7 @@ def create_material_request_from_portal_indent(name, selected_items):
 
 
 @frappe.whitelist()
-def create_delivery_challan_from_portal_indent(name):
+def get_dux_indent_delivery_action_data(name):
     _require_authenticated_user()
     doc = frappe.get_doc("Dux Indent Master", name)
     doc.check_permission("read")
@@ -2545,8 +2591,65 @@ def create_delivery_challan_from_portal_indent(name):
         for row in _document_operational_actions("dux_indent_master", doc)
     ):
         frappe.throw(_("Delivery Challan is not available for this indent."), frappe.PermissionError)
+
+    from dux_indent_master.api import (
+        _get_delivery_creation_balance_qty,
+        _get_draft_delivery_qty_map,
+        _sync_delivery_challan_tracking,
+    )
+
+    _sync_delivery_challan_tracking(doc.name)
+    doc.reload()
+    draft_qty = _get_draft_delivery_qty_map(doc.name)
+    items = []
+    for row in doc.get("items") or []:
+        balance_qty = _get_delivery_creation_balance_qty(row, draft_qty)
+        if not row.item_code or balance_qty <= 0:
+            continue
+        items.append(
+            {
+                "row_name": row.name,
+                "item_name": frappe.get_cached_value("Item", row.item_code, "item_name")
+                or row.item_code,
+                "balance_qty": flt(balance_qty),
+                "max_qty": flt(balance_qty),
+            }
+        )
+
+    return {"name": doc.name, "company": doc.get("company_name"), "items": items}
+
+
+@frappe.whitelist()
+def create_delivery_challan_from_portal_indent(name, selected_items):
+    _require_authenticated_user()
+    doc = frappe.get_doc("Dux Indent Master", name)
+    doc.check_permission("read")
+    if not any(
+        row["action"] == "indent_delivery_challan"
+        for row in _document_operational_actions("dux_indent_master", doc)
+    ):
+        frappe.throw(_("Delivery Challan is not available for this indent."), frappe.PermissionError)
+    allowed = {row.name for row in doc.get("items") or []}
+    selected_items = frappe.parse_json(selected_items) if isinstance(selected_items, str) else selected_items
+    if not isinstance(selected_items, list):
+        frappe.throw(_("Invalid Delivery Challan item selection."))
+    cleaned = []
+    seen = set()
+    for row in selected_items or []:
+        if not isinstance(row, dict):
+            frappe.throw(_("Invalid Delivery Challan item selection."))
+        row_name = row.get("item_row")
+        qty = flt(row.get("qty"))
+        if row_name not in allowed or row_name in seen:
+            frappe.throw(_("Select a valid indent item once for Delivery Challan."))
+        if qty <= 0:
+            frappe.throw(_("Delivery Challan quantity must be greater than zero."))
+        seen.add(row_name)
+        cleaned.append({"item_row": row_name, "qty": qty})
+    if not cleaned:
+        frappe.throw(_("Enter Delivery Challan quantity for at least one item."))
     method = frappe.get_attr("dux_indent_master.api.create_delivery_challan_from_indent")
-    return method(name)
+    return method(name, cleaned)
 
 
 @frappe.whitelist()

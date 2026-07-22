@@ -200,7 +200,7 @@ def create_material_request_from_indent(indent_name, selected_items):
         frappe.throw(_("Submit Dux Indent Master before creating a Material Request."))
     _validate_indent_open_for_transactions(indent)
     if _has_material_purchase(indent):
-        frappe.throw(_("Material Purchase can be created only once for a Dux Indent Master."))
+        frappe.throw(_("Material Request can be created only once for a Dux Indent Master."))
 
     quantities = _parse_selected_items(selected_items)
     if not quantities:
@@ -266,7 +266,7 @@ def create_material_request_from_indent(indent_name, selected_items):
 
 
 @frappe.whitelist()
-def create_delivery_challan_from_indent(indent_name):
+def create_delivery_challan_from_indent(indent_name, selected_items=None):
     if not indent_name or not frappe.db.exists("Dux Indent Master", indent_name):
         frappe.throw(_("Save Dux Indent Master before creating a Delivery Challan."))
 
@@ -283,17 +283,45 @@ def create_delivery_challan_from_indent(indent_name):
     _validate_indent_open_for_transactions(indent)
 
     draft_qty = _get_draft_delivery_qty_map(indent.name)
-    rows = [
-        (row, _get_delivery_creation_balance_qty(row, draft_qty))
-        for row in indent.get("items") or []
-        if row.item_code and _get_delivery_creation_balance_qty(row, draft_qty) > 0
-    ]
+    requested_qty = _parse_selected_items(selected_items) if selected_items is not None else None
+    indent_rows = {row.name: row for row in indent.get("items") or []}
+    if requested_qty is not None:
+        invalid_rows = [row_name for row_name in requested_qty if row_name not in indent_rows]
+        if invalid_rows:
+            frappe.throw(_("One or more selected rows do not belong to this indent."))
+        if not requested_qty:
+            frappe.throw(_("Enter Delivery Challan quantity for at least one item."))
+
+    rows = []
+    for row in indent.get("items") or []:
+        if not row.item_code:
+            continue
+        balance_qty = _get_delivery_creation_balance_qty(row, draft_qty)
+        if requested_qty is None:
+            if balance_qty > 0:
+                rows.append((row, balance_qty, None))
+            continue
+        if row.name not in requested_qty:
+            continue
+        qty = flt(requested_qty[row.name])
+        if qty <= 0:
+            frappe.throw(_("Delivery Challan Qty must be greater than zero for {0}.").format(row.item_code))
+        if qty > flt(balance_qty):
+            frappe.throw(
+                _("Delivery Challan Qty {0} cannot exceed indent balance Qty {1} for {2}.").format(
+                    qty, balance_qty, row.item_code
+                )
+            )
+        rows.append((row, balance_qty, qty))
+
     if not rows:
         frappe.throw(_("No delivery balance quantity is available for Delivery Challan."))
 
-    warehouses = [_get_row_warehouse(row) for row, balance_qty in rows]
+    warehouses = [_get_row_warehouse(row) for row, balance_qty, requested in rows]
     missing_warehouse_rows = [
-        row.idx or row.item_code for (row, balance_qty), warehouse in zip(rows, warehouses) if not warehouse
+        row.idx or row.item_code
+        for (row, balance_qty, requested), warehouse in zip(rows, warehouses)
+        if not warehouse
     ]
     if missing_warehouse_rows:
         frappe.throw(
@@ -302,35 +330,15 @@ def create_delivery_challan_from_indent(indent_name):
             )
         )
 
-    stock_keys = {
-        (row.item_code, warehouse)
-        for (row, balance_qty), warehouse in zip(rows, warehouses)
-    }
-    available_stock_qty = _get_available_delivery_stock_qty_map(stock_keys)
     delivery_rows = []
-    stock_limited_items = []
-
-    for (row, balance_qty), warehouse in zip(rows, warehouses):
-        stock_key = (row.item_code, warehouse)
-        available_qty = max(flt(available_stock_qty.get(stock_key)), 0)
-        qty = min(flt(balance_qty), available_qty)
-
+    for (row, balance_qty, requested), warehouse in zip(rows, warehouses):
+        qty = flt(requested) if requested is not None else flt(balance_qty)
         if qty <= 0:
-            stock_limited_items.append(row.item_code)
             continue
-
         delivery_rows.append((row, qty, warehouse))
-        available_stock_qty[stock_key] = max(available_qty - qty, 0)
-        if qty < flt(balance_qty):
-            stock_limited_items.append(row.item_code)
 
     if not delivery_rows:
-        frappe.throw(
-            _(
-                "Delivery Challan cannot be created because available stock is zero "
-                "or already reserved in another open Delivery Challan."
-            )
-        )
+        frappe.throw(_("No delivery balance quantity is available for Delivery Challan."))
 
     company = indent.company_name
     transit_warehouse = _get_delivery_challan_transit_warehouse(company)
@@ -380,27 +388,17 @@ def create_delivery_challan_from_indent(indent_name):
     indent.update_purchase_status()
     _save_indent(indent)
 
-    if stock_limited_items:
-        frappe.msgprint(
-            _("Delivery quantity was limited to available stock for: {0}.").format(
-                ", ".join(sorted(set(stock_limited_items)))
-            ),
-            indicator="orange",
-            title=_("Stock Limited"),
-        )
-
     return {"doctype": delivery_challan.doctype, "name": delivery_challan.name}
 
 
 def on_delivery_challan_validate(doc, method=None):
     _set_delivery_challan_item_quantities(doc)
-    _validate_delivery_challan_stock_limits(doc)
+    _validate_delivery_challan_qty_limits(doc)
 
 
 def on_delivery_challan_before_submit(doc, method=None):
     _set_delivery_challan_item_quantities(doc)
     _validate_delivery_challan_qty_limits(doc)
-    _validate_delivery_challan_stock_limits(doc)
 
 
 def on_delivery_challan_submit(doc, method=None):
@@ -751,9 +749,14 @@ def _validate_delivery_challan_qty_limits(doc):
     if not indent_name:
         return
 
+    frappe.db.sql(
+        "select name from `tabDux Indent Master` where name = %s for update",
+        indent_name,
+    )
     indent = frappe.get_doc("Dux Indent Master", indent_name)
     indent_rows = {row.name: row for row in indent.get("items") or []}
-    existing_qty = _get_submitted_delivery_qty_map(indent_name, exclude_delivery_challan=doc.name)
+    submitted_qty = _get_submitted_delivery_qty_map(indent_name, exclude_delivery_challan=doc.name)
+    draft_qty = _get_draft_delivery_qty_map(indent_name, exclude_delivery_challan=doc.name)
     incoming_qty = _get_delivery_challan_item_qty_map(doc)
 
     for row_name, qty in incoming_qty.items():
@@ -762,7 +765,7 @@ def _validate_delivery_challan_qty_limits(doc):
             frappe.throw(_("Invalid Dux Indent item row in Delivery Challan: {0}").format(row_name))
 
         allowed_qty = flt(indent_row.qty)
-        total_qty = flt(existing_qty.get(row_name)) + flt(qty)
+        total_qty = flt(submitted_qty.get(row_name)) + flt(draft_qty.get(row_name)) + flt(qty)
         if total_qty > allowed_qty:
             frappe.throw(
                 _("Delivery Challan Qty {0} cannot exceed indent Qty {1} for {2}.").format(
@@ -982,13 +985,19 @@ def _get_submitted_delivery_qty_map(indent_name, exclude_delivery_challan=None):
     return {row.indent_item: flt(row.qty) for row in rows}
 
 
-def _get_draft_delivery_qty_map(indent_name):
+def _get_draft_delivery_qty_map(indent_name, exclude_delivery_challan=None):
     if not (
         frappe.db.exists("DocType", "Delivery Challan")
         and frappe.db.has_column("Delivery Challan", "custom_dux_indent_master")
         and frappe.db.has_column("Delivery Challan Item", "custom_dux_indent_item")
     ):
         return {}
+
+    conditions = ["dc.custom_dux_indent_master = %s", "dc.docstatus = 0"]
+    values = [indent_name]
+    if exclude_delivery_challan:
+        conditions.append("dc.name != %s")
+        values.append(exclude_delivery_challan)
 
     qty_expression = _get_delivery_challan_qty_expression("item")
     rows = frappe.db.sql(
@@ -998,12 +1007,11 @@ def _get_draft_delivery_qty_map(indent_name):
             sum({qty_expression}) as qty
         from `tabDelivery Challan Item` item
         inner join `tabDelivery Challan` dc on dc.name = item.parent
-        where dc.custom_dux_indent_master = %s
-          and dc.docstatus = 0
+        where {" and ".join(conditions)}
           and coalesce(item.custom_dux_indent_item, '') != ''
         group by item.custom_dux_indent_item
         """,
-        indent_name,
+        values,
         as_dict=True,
     )
     return {row.indent_item: flt(row.qty) for row in rows}
