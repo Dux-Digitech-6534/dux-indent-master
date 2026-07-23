@@ -808,6 +808,7 @@ FORM_CONFIG["delivery_receipts"] = {
         {"label": "Receipt Details", "fields": ["delivery_challan", "company", "posting_date", "status"]},
         {"label": "Warehouse Movement", "fields": ["source_warehouse", "transit_warehouse", "target_warehouse"]},
         {"label": "Reference & Remarks", "fields": ["remarks"]},
+        {"label": "Receipt Tracking", "fields": ["stock_entry", "received_by", "receipt_datetime"]},
     ],
     "tables": [
         {
