@@ -21,6 +21,11 @@ if (frappe.router && typeof frappe.router.on === "function") {
 	});
 }
 
+const PORTAL_PRINT_FORMATS = {
+	purchase_order: "JEW Purchase Order",
+	delivery_challan: "JEW Delivery Challan",
+};
+
 class DuxProcurementPortal {
 	constructor(wrapper) {
 		this.wrapper = wrapper;
@@ -145,7 +150,7 @@ class DuxProcurementPortal {
 			if (action === "dashboard") this.open_dashboard();
 			if (action === "new") this.open_document_form($target.data("key"));
 			if (action === "back-list") this.open_document_list($target.data("key"));
-			if (action === "print-document") this.open_purchase_order_print($target.data("name"));
+			if (action === "print-document") this.open_document_print($target.data("key"), $target.data("name"));
 			if (action === "edit-form") this.open_document_form($target.data("key"), $target.data("name"));
 			if (action === "toggle-create-menu") {
 				event.stopPropagation();
@@ -746,8 +751,8 @@ class DuxProcurementPortal {
 		const form_button = hide_submitted_form_button ? "" : `<button class="duxp-btn ${data.can_edit ? "duxp-btn-primary" : "duxp-btn-secondary"}"
 			data-action="edit-form" data-key="${this.escape(data.key)}" data-name="${this.escape(data.name)}">
 			${this.icon("edit", 14)}${form_label}</button>`;
-		const print_button = data.key === "purchase_order" ? `<button class="duxp-btn duxp-btn-secondary"
-			data-action="print-document" data-name="${this.escape(data.name)}">
+		const print_button = PORTAL_PRINT_FORMATS[data.key] ? `<button class="duxp-btn duxp-btn-secondary"
+			data-action="print-document" data-key="${this.escape(data.key)}" data-name="${this.escape(data.name)}">
 			${this.icon("print", 14)}${__("Print")}</button>` : "";
 		const submit_button = data.can_submit ? `<button class="duxp-btn duxp-btn-primary" data-action="submit-detail"
 			data-key="${this.escape(data.key)}" data-name="${this.escape(data.name)}"
@@ -2365,12 +2370,14 @@ class DuxProcurementPortal {
 		frappe.set_route("Form", doctype, name);
 	}
 
-	open_purchase_order_print(name) {
-		if (!name) return;
+	open_document_print(key, name) {
+		const format = PORTAL_PRINT_FORMATS[key];
+		const item = this.items[key];
+		if (!name || !format || !item) return;
 		const params = new URLSearchParams({
-			doctype: "Purchase Order",
+			doctype: item.doctype,
 			name: String(name),
-			format: "JEW Purchase Order",
+			format,
 			no_letterhead: "1",
 			_lang: frappe.boot.lang || "en",
 		});
