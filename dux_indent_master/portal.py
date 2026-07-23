@@ -1049,6 +1049,10 @@ def get_document_list(
     if any(column["fieldname"] == "docstatus" for column in columns):
         for row in rows:
             row.docstatus = _docstatus_label(row.docstatus)
+    user_columns = [column for column in columns if column.get("fieldtype") == "Link" and column.get("options") == "User"]
+    for column in user_columns:
+        for row in rows:
+            row[column["fieldname"]] = _resolve_display_value(column, row.get(column["fieldname"]))
 
     status_options = []
     if status_field == "docstatus":
@@ -1671,6 +1675,7 @@ def get_document_detail(route_key, name):
             if column["fieldname"] == "docstatus"
             else doc.get(column["fieldname"])
         )
+        value = _resolve_display_value(column, value)
         if _has_portal_display_value(value):
             fields.append({**column, "value": value})
 
@@ -1723,7 +1728,7 @@ def get_document_detail(route_key, name):
         child_rows = []
         for row in doc.get(table_config["fieldname"]) or []:
             row_values = {
-                column["fieldname"]: row.get(column["fieldname"])
+                column["fieldname"]: _resolve_display_value(column, row.get(column["fieldname"]))
                 for column in child_columns
             }
             if route_key == "dux_indent_master" and table_config["fieldname"] == "items":
@@ -3220,6 +3225,14 @@ def _require_authenticated_user():
 
 def _docstatus_label(docstatus):
     return {0: "Draft", 1: "Submitted", 2: "Cancelled"}.get(cint(docstatus), "Draft")
+
+
+def _resolve_display_value(column, value):
+    """Show a User's full name instead of their raw email/ID wherever a
+    Link-to-User field is displayed (list columns, detail fields, child rows)."""
+    if value and column.get("fieldtype") == "Link" and column.get("options") == "User":
+        return frappe.get_cached_value("User", value, "full_name") or value
+    return value
 
 
 def _get_initials(value):
