@@ -43,6 +43,8 @@ class DuxProcurementPortal {
 		this.items = {};
 		this.search_timer = null;
 		this.updating_indent_company_warehouses = false;
+		this.receipt_loading_challan = null;
+		this.receipt_source_challan = null;
 		this.initialized = false;
 		this.make_shell();
 		this.bind_events();
@@ -92,8 +94,8 @@ class DuxProcurementPortal {
 			<div class="duxp-root" data-dux-theme="${theme}">
 				<div class="duxp-sidebar-backdrop" data-action="close-sidebar"></div>
 				<aside class="duxp-sidebar">
-					<div class="duxp-brand">
-						<img class="duxp-brand-logo" src="/private/files/dux-logo.png" alt="Dux Digitech">
+					<div class="duxp-brand" aria-label="${__("Jain Engineering Work")}">
+						<div class="duxp-brand-name">${__("Jain Engineering Work")}</div>
 					</div>
 					<div class="duxp-nav-search">
 						${this.icon("search", 15)}
@@ -143,6 +145,7 @@ class DuxProcurementPortal {
 			if (action === "dashboard") this.open_dashboard();
 			if (action === "new") this.open_document_form($target.data("key"));
 			if (action === "back-list") this.open_document_list($target.data("key"));
+			if (action === "print-document") this.open_purchase_order_print($target.data("name"));
 			if (action === "edit-form") this.open_document_form($target.data("key"), $target.data("name"));
 			if (action === "toggle-create-menu") {
 				event.stopPropagation();
@@ -157,6 +160,8 @@ class DuxProcurementPortal {
 			if (action === "get-items-from") this.select_mapping_source(
 				$target.data("target-key"), $target.data("source-key")
 			);
+			if (action === "close-source-picker") this.close_source_picker();
+			if (action === "confirm-source-picker") this.confirm_source_picker();
 			if (action === "run-lifecycle") this.run_lifecycle_action(
 				$target.data("key"), $target.data("name"), $target.data("lifecycle-action"),
 				Boolean($target.data("requires-reason")), $target.text().trim()
@@ -266,6 +271,13 @@ class DuxProcurementPortal {
 			if (!$(event.target).closest(".duxp-dropdown").length) {
 				this.$root.find(".duxp-dropdown.is-open").removeClass("is-open");
 			}
+		});
+		this.$root.on("change", '[name="duxp-picker-select"]', (event) => {
+			const $input = $(event.currentTarget);
+			this.toggle_source_picker_selection($input.val(), $input.attr("type") === "checkbox");
+		});
+		this.$root.on("input", '[data-role="source-picker-search"]', (event) => {
+			this.search_source_picker(event.currentTarget.value);
 		});
 	}
 
@@ -734,6 +746,9 @@ class DuxProcurementPortal {
 		const form_button = hide_submitted_form_button ? "" : `<button class="duxp-btn ${data.can_edit ? "duxp-btn-primary" : "duxp-btn-secondary"}"
 			data-action="edit-form" data-key="${this.escape(data.key)}" data-name="${this.escape(data.name)}">
 			${this.icon("edit", 14)}${form_label}</button>`;
+		const print_button = data.key === "purchase_order" ? `<button class="duxp-btn duxp-btn-secondary"
+			data-action="print-document" data-name="${this.escape(data.name)}">
+			${this.icon("print", 14)}${__("Print")}</button>` : "";
 		const submit_button = data.can_submit ? `<button class="duxp-btn duxp-btn-primary" data-action="submit-detail"
 			data-key="${this.escape(data.key)}" data-name="${this.escape(data.name)}"
 			data-workflow-action="${this.escape(data.submit_action || "")}">
@@ -746,6 +761,7 @@ class DuxProcurementPortal {
 				<div><span class="duxp-eyebrow">${this.escape(data.label)} · <em>${this.escape(data.name)}</em></span><h1>${this.escape(data.name)}</h1><div class="duxp-status-line">${this.status_tag(data.status)}</div></div>
 				<div class="duxp-head-actions">
 					<button class="duxp-btn duxp-btn-secondary" data-action="back-list" data-key="${this.escape(data.key)}">${this.icon("back", 14)}${__("Back to List")}</button>
+					${print_button}
 					${create_actions}
 					${operational_actions}
 					${workflow_actions}
@@ -891,24 +907,40 @@ class DuxProcurementPortal {
 	version_activity_details(version, doctype) {
 		let data = version.data || {};
 		try { if (typeof data === "string") data = JSON.parse(data); } catch (error) { data = {}; }
+		const MAX_DETAILS = 6;
 		const details = [];
 		(data.changed || []).forEach((change) => {
 			const fieldname = change[0];
+			const before = this.activity_value(change[1]);
+			const after = this.activity_value(change[2]);
+			if (before === after) return;
 			const label = frappe.meta.get_label(doctype, fieldname) || frappe.model.unscrub(fieldname || __("Field"));
-			details.push(`${label}: ${this.activity_value(change[1])} → ${this.activity_value(change[2])}`);
+			details.push(`${label}: ${before} → ${after}`);
 		});
 		(data.added || []).forEach((change) => details.push(__("Added row in {0}", [frappe.model.unscrub(change[0] || __("Items"))])));
 		(data.removed || []).forEach((change) => details.push(__("Removed row from {0}", [frappe.model.unscrub(change[0] || __("Items"))])));
 		(data.row_changed || []).forEach((change) => details.push(__("Updated row in {0}", [frappe.model.unscrub(change[0] || __("Items"))])));
-		return details.length ? details : [__("Document values updated")];
+		if (!details.length) return [__("Document values updated")];
+		if (details.length > MAX_DETAILS) {
+			return [...details.slice(0, MAX_DETAILS), __("+{0} more changes", [details.length - MAX_DETAILS])];
+		}
+		return details;
 	}
 
 	activity_value(value) {
 		if (value === null || value === undefined || value === "") return "—";
 		if (typeof value === "object") {
-			try { return JSON.stringify(value); } catch (error) { return String(value); }
+			try { value = JSON.stringify(value); } catch (error) { value = String(value); }
 		}
-		return String(value);
+		let text = String(value);
+		if (/<[a-z][\s\S]*>/i.test(text)) {
+			const element = document.createElement("div");
+			element.innerHTML = text;
+			element.querySelectorAll("script, style").forEach((node) => node.remove());
+			text = String(element.textContent || element.innerText || "").replace(/\s+/g, " ").trim();
+		}
+		if (text.length > 80) text = `${text.slice(0, 77)}...`;
+		return text || "—";
 	}
 
 	activity_plain(value) {
@@ -974,6 +1006,7 @@ class DuxProcurementPortal {
 	async open_document_form(key, name = null) {
 		const item = this.items[key];
 		if (!item || item.kind !== "document") return;
+		if (key === "delivery_receipts") this.receipt_source_challan = null;
 		this.state.route_key = key;
 		this.state.view = "form";
 		this.state.document_name = name || null;
@@ -1116,9 +1149,15 @@ class DuxProcurementPortal {
 	}
 
 	async open_delivery_challan_receipt(name) {
+		const delivery_challan = String(name || "").trim();
+		if (!delivery_challan || this.receipt_loading_challan === delivery_challan) return;
+		this.receipt_loading_challan = delivery_challan;
 		this.show_loading();
 		try {
-			const data = await this.call("dux_indent_master.portal.get_delivery_challan_receipt_form", { name });
+			const data = await this.call("dux_indent_master.portal.get_delivery_challan_receipt_form", {
+				name: delivery_challan,
+			});
+			this.receipt_source_challan = delivery_challan;
 			this.state.route_key = "delivery_receipts";
 			this.state.view = "form";
 			this.state.document_name = null;
@@ -1126,6 +1165,10 @@ class DuxProcurementPortal {
 			this.render_document_form(data);
 		} catch (error) {
 			this.show_error(error);
+		} finally {
+			if (this.receipt_loading_challan === delivery_challan) {
+				this.receipt_loading_challan = null;
+			}
 		}
 	}
 
@@ -1298,55 +1341,119 @@ class DuxProcurementPortal {
 			item.target_route_key === target_key && item.source_route_key === source_key
 		);
 		if (!action) return;
-		const filters = Object.assign({}, action.filters || {});
 		const company_control = this.form_controls && this.form_controls.company;
 		const company = company_control && company_control.get_value ? company_control.get_value() : null;
 		if (action.company_filter && !company) {
 			frappe.msgprint({
 				title: __("Company Required"),
-				message: __("Please select Company before fetching Material Requests."),
+				message: __("Please select Company before fetching {0}.", [action.label]),
 				indicator: "orange",
 			});
 			return;
 		}
-		if (company) filters.company = company;
+		this.open_source_picker(target_key, source_key, action, company);
+	}
 
-		if (action.multiple && frappe.ui.form.MultiSelectDialog) {
-			const dialog = new frappe.ui.form.MultiSelectDialog({
-				doctype: action.source_doctype,
-				target: { doc: { company } },
-				date_field: action.date_field || undefined,
-				setters: action.setters || {},
-				get_query: () => ({ filters }),
-				add_filters_group: 1,
-				allow_child_item_selection: action.allow_child_item_selection,
-				child_fieldname: action.child_fieldname,
-				child_columns: action.child_columns || [],
-				size: "extra-large",
-				action: (selections, args) => {
-					const source_names = [...new Set(selections || [])];
-					if (!source_names.length) {
-						frappe.msgprint(__("Please select at least one Material Request."));
-						return;
-					}
-					dialog.dialog.hide();
-					this.open_mapped_documents_form(target_key, source_key, source_names, args, company);
-				},
+	async open_source_picker(target_key, source_key, action, company, search = "") {
+		let data;
+		try {
+			data = await this.call("dux_indent_master.portal.get_mapping_source_options", {
+				target_route_key: target_key,
+				source_route_key: source_key,
+				company: company || undefined,
+				search: search || undefined,
 			});
+		} catch (error) {
+			this.show_action_error(error, __("Unable to Load Documents"));
 			return;
 		}
+		this.source_picker = {
+			target_key,
+			source_key,
+			action,
+			company,
+			search,
+			rows: data.rows || [],
+			selected: (this.source_picker && this.source_picker.selected) || new Set(),
+		};
+		this.render_source_picker_modal();
+	}
 
-		frappe.prompt([
-			{
-				fieldname: "source_name",
-				label: action.label,
-				fieldtype: "Link",
-				options: action.source_doctype,
-				reqd: 1,
-				get_query: () => ({ filters }),
-			},
-		], (values) => this.open_mapped_document_form(target_key, source_key, values.source_name),
-		__("Get Items From"), __("Get Items"));
+	render_source_picker_modal() {
+		const picker = this.source_picker;
+		this.$root.find(".duxp-modal-overlay").remove();
+		if (!picker) return;
+		const multiple = Boolean(picker.action.multiple);
+		const rows_html = (picker.rows || []).map((row) => `
+			<label class="duxp-picker-row">
+				<input type="${multiple ? "checkbox" : "radio"}" name="duxp-picker-select" value="${this.escape(row.name)}" ${picker.selected.has(row.name) ? "checked" : ""}>
+				<span class="duxp-picker-row-main">
+					<strong>${this.escape(row.name)}</strong>
+					${row.supplier_name || row.supplier ? `<small>${this.escape(row.supplier_name || row.supplier)}</small>` : ""}
+				</span>
+				${row.grand_total !== undefined && row.grand_total !== null ? `<span class="duxp-picker-row-amount">${this.escape(format_currency(flt(row.grand_total), frappe.defaults.get_default("currency") || "INR"))}</span>` : ""}
+				${row.status ? this.status_tag(row.status) : ""}
+			</label>
+		`).join("");
+		const $overlay = $(`
+			<div class="duxp-modal-overlay" data-action="close-source-picker">
+				<div class="duxp-modal duxp-source-picker">
+					<header><h3>${this.escape(picker.action.label)}</h3><button class="duxp-icon-btn" data-action="close-source-picker" aria-label="${__("Close")}">${this.icon("close", 15)}</button></header>
+					<div class="duxp-modal-body">
+						<label class="duxp-search-field duxp-picker-search">${this.icon("search", 14)}<input data-role="source-picker-search" placeholder="${__("Search")} ${this.escape(picker.action.label)}…" value="${this.escape(picker.search || "")}"></label>
+						<div class="duxp-picker-list">${rows_html || this.empty_state(__("Nothing available"), __("No eligible documents to pull items from."))}</div>
+					</div>
+					<footer>
+						<button class="duxp-btn duxp-btn-secondary" data-action="close-source-picker">${__("Cancel")}</button>
+						<button class="duxp-btn duxp-btn-primary" data-action="confirm-source-picker">${this.icon("download", 14)}${__("Get Items")}</button>
+					</footer>
+				</div>
+			</div>
+		`);
+		$overlay.find(".duxp-modal").on("click", (event) => event.stopPropagation());
+		this.$root.append($overlay);
+	}
+
+	close_source_picker() {
+		this.source_picker = null;
+		this.$root.find(".duxp-modal-overlay").remove();
+	}
+
+	toggle_source_picker_selection(name, multiple) {
+		const picker = this.source_picker;
+		if (!picker || !name) return;
+		if (!multiple) {
+			picker.selected = new Set([name]);
+			return;
+		}
+		if (picker.selected.has(name)) picker.selected.delete(name);
+		else picker.selected.add(name);
+	}
+
+	search_source_picker(value) {
+		const picker = this.source_picker;
+		if (!picker) return;
+		clearTimeout(this.source_picker_search_timer);
+		this.source_picker_search_timer = setTimeout(() => {
+			this.open_source_picker(picker.target_key, picker.source_key, picker.action, picker.company, value);
+		}, 350);
+	}
+
+	confirm_source_picker() {
+		const picker = this.source_picker;
+		if (!picker) return;
+		const source_names = [...(picker.selected || [])];
+		if (!source_names.length) {
+			frappe.show_alert({ message: __("Select at least one document."), indicator: "orange" });
+			return;
+		}
+		const { target_key, source_key, action, company } = picker;
+		this.close_source_picker();
+		if (action.multiple) {
+			this.open_mapped_documents_form(target_key, source_key, source_names, {}, company);
+		} else {
+			this.open_mapped_document_form(target_key, source_key, source_names[0]);
+		}
 	}
 
 	render_document_form(data) {
@@ -1690,6 +1797,7 @@ class DuxProcurementPortal {
 		this.refresh_indent_attachment_preview(fieldname);
 		if (this.form_data && this.form_data.key === "delivery_receipts"
 			&& this.form_data.is_new && fieldname === "delivery_challan" && value) {
+			if (value === this.receipt_source_challan || value === this.receipt_loading_challan) return;
 			await this.open_delivery_challan_receipt(value);
 			return;
 		}
@@ -2257,6 +2365,18 @@ class DuxProcurementPortal {
 		frappe.set_route("Form", doctype, name);
 	}
 
+	open_purchase_order_print(name) {
+		if (!name) return;
+		const params = new URLSearchParams({
+			doctype: "Purchase Order",
+			name: String(name),
+			format: "JEW Purchase Order",
+			no_letterhead: "1",
+			_lang: frappe.boot.lang || "en",
+		});
+		window.open(`/printview?${params.toString()}`, "_blank", "noopener,noreferrer");
+	}
+
 	toggle_theme() {
 		const current = this.$root.attr("data-dux-theme") || "light";
 		const next = current === "dark" ? "light" : "dark";
@@ -2399,6 +2519,7 @@ class DuxProcurementPortal {
 			filter: '<path d="M3 5h18l-7 8v6l-4-2v-4z"/>',
 			calendar: '<rect x="3.5" y="5" width="17" height="16" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
 			plus: '<path d="M12 5v14M5 12h14"/>',
+			close: '<path d="M18 6 6 18M6 6l12 12"/>',
 			eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
 			back: '<path d="M19 12H5m7 7-7-7 7-7"/>',
 			forward: '<path d="M5 12h14m-7-7 7 7-7 7"/>',
@@ -2422,6 +2543,7 @@ class DuxProcurementPortal {
 			save: '<path d="M4 3h13l3 3v15H4zM8 3v6h8V3M8 21v-7h8v7"/>',
 			shield: '<path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6zM9 12l2 2 4-5"/>',
 			trash: '<path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/>',
+			print: '<path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M7 14h10v7H7z"/><path d="M17 11h.01"/>',
 		};
 		return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.document}</svg>`;
 	}

@@ -443,6 +443,7 @@ DOCUMENT_CONFIG = {
     },
     "dux_indent_master": {
         "label": "Dux Indent Master",
+        "menu_label": "Material Indent",
         "doctype": "Dux Indent Master",
         "icon": "clipboard",
         "description": "Indent planning, procurement progress, stock and delivery tracking.",
@@ -670,7 +671,7 @@ FORM_CONFIG = {
                     "custom_sap_remarks": {"force_editable": True},
                 },
             },
-            {"label": "Taxes and Charges", "fields": ["taxes_and_charges"]},
+            {"label": "Taxes and Charges", "position": "after_tables", "fields": ["taxes_and_charges"]},
             {"label": "Totals", "position": "after_tables", "fields": ["grand_total", "in_words", "rounding_adjustment", "rounded_total", "advance_paid"]},
             {"label": "Supplier Address, Billing & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "billing_address", "billing_address_display", "contact_person", "contact_display", "contact_mobile", "contact_email", "place_of_supply"]},
             {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display"]},
@@ -686,7 +687,7 @@ FORM_CONFIG = {
     },
     "purchase_receipt": {
         "sections": [
-            {"label": "Supplier & Posting", "fields": ["naming_series", "supplier", "supplier_delivery_note", "purchase_order", "posting_date", "posting_time", "company", "set_warehouse", "rejected_warehouse"]},
+            {"label": "Supplier & Posting", "fields": ["naming_series", "supplier", "supplier_delivery_note", "purchase_order", "posting_date", "posting_time", "company", "set_warehouse"]},
             {"label": "Supplier Address, Billing & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "billing_address", "billing_address_display", "contact_person", "contact_display", "contact_mobile", "contact_email", "place_of_supply"]},
             {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display"]},
         ],
@@ -783,21 +784,22 @@ FORM_CONFIG = {
     },
     "item": {
         "sections": [
-            {"label": "Item Details", "fields": ["item_code", "item_name", "item_group", "gst_hsn_code", "stock_uom", "brand", "description", "disabled"]},
-            {"label": "Stock & Valuation", "fields": ["is_stock_item", "include_item_in_manufacturing", "opening_stock", "valuation_rate", "standard_rate", "valuation_method", "allow_negative_stock", "shelf_life_in_days", "end_of_life", "weight_per_unit", "weight_uom", "default_material_request_type"]},
-            {"label": "Batch & Serial", "fields": ["has_batch_no", "create_new_batch", "batch_number_series", "has_expiry_date", "retain_sample", "sample_quantity", "has_serial_no", "serial_no_series"]},
-            {"label": "Assets", "fields": ["is_fixed_asset", "auto_create_assets", "is_grouped_asset", "asset_category", "asset_naming_series"]},
-            {"label": "Purchase", "fields": ["purchase_uom", "min_order_qty", "safety_stock", "is_purchase_item", "lead_time_days", "inspection_required_before_purchase", "quality_inspection_template"]},
-            {"label": "Sales", "fields": ["sales_uom", "grant_commission", "is_sales_item", "max_discount", "inspection_required_before_delivery"]},
+            {
+                "label": "Item Details",
+                "fields": [
+                    "item_code",
+                    "item_name",
+                    "item_group",
+                    "gst_hsn_code",
+                    "stock_uom",
+                    "disabled",
+                    "allow_alternative_item",
+                    "is_stock_item",
+                    "valuation_rate",
+                ],
+            },
         ],
-        "tables": [
-            {"fieldname": "uoms", "fields": ["uom", "conversion_factor"]},
-            {"fieldname": "item_defaults", "fields": ["company", "default_warehouse", "default_price_list"]},
-            {"fieldname": "barcodes", "fields": ["barcode", "barcode_type", "uom"]},
-            {"fieldname": "reorder_levels", "fields": ["warehouse", "warehouse_reorder_level", "warehouse_reorder_qty", "material_request_type"]},
-            {"fieldname": "customer_items", "fields": ["customer_name", "ref_code"]},
-            {"fieldname": "taxes", "fields": ["item_tax_template", "tax_category"]},
-        ],
+        "tables": [],
     },
 }
 
@@ -805,8 +807,7 @@ FORM_CONFIG["delivery_receipts"] = {
     "sections": [
         {"label": "Receipt Details", "fields": ["delivery_challan", "company", "posting_date", "status"]},
         {"label": "Warehouse Movement", "fields": ["source_warehouse", "transit_warehouse", "target_warehouse"]},
-        {"label": "Reference & Remarks", "fields": ["project", "cost_center", "remarks"]},
-        {"label": "Receipt Tracking", "fields": ["stock_entry", "received_by", "receipt_datetime"]},
+        {"label": "Reference & Remarks", "fields": ["remarks"]},
     ],
     "tables": [
         {
@@ -853,7 +854,7 @@ def get_portal_bootstrap():
         if _can_read_doctype(config["doctype"]):
             available_items[key] = {
                 "key": key,
-                "label": _(config["label"]),
+                "label": _(config.get("menu_label") or config["label"]),
                 "icon": config["icon"],
                 "description": _(config["description"]),
                 "kind": "document",
@@ -2062,6 +2063,55 @@ def _build_mapped_document_form(
 
 
 @frappe.whitelist()
+def get_mapping_source_options(target_route_key, source_route_key, search=None, company=None):
+    """List eligible source documents for the portal's own 'Get Items From' picker
+    (replaces the native MultiSelectDialog/frappe.prompt so it matches the portal theme)."""
+    _require_authenticated_user()
+    mapping = (DOCUMENT_MAPPINGS.get(target_route_key) or {}).get(source_route_key)
+    if not mapping:
+        frappe.throw(_("This document mapping is not available."), frappe.PermissionError)
+
+    source_config = _get_document_config(source_route_key)
+    doctype = source_config["doctype"]
+    _require_doctype_permission(doctype, "read")
+    meta = frappe.get_meta(doctype)
+
+    filters = deepcopy(mapping.get("filters") or {})
+    company = cstr(company).strip()
+    if company and mapping.get("company_filter"):
+        filters["company"] = company
+
+    fields = ["name"]
+    for candidate in (
+        mapping.get("date_field") or source_config.get("date_field"),
+        source_config.get("company_field"),
+        "supplier",
+        "supplier_name",
+        "grand_total",
+        "status",
+    ):
+        if candidate and _field_exists(meta, candidate) and candidate not in fields:
+            fields.append(candidate)
+
+    or_filters = []
+    search = cstr(search).strip()
+    if search:
+        for fieldname in _unique(["name", *(source_config.get("search_fields") or [])]):
+            if _field_exists(meta, fieldname):
+                or_filters.append([doctype, fieldname, "like", f"%{search}%"])
+
+    rows = frappe.get_list(
+        doctype,
+        fields=fields,
+        filters=filters,
+        or_filters=or_filters,
+        order_by="modified desc",
+        limit_page_length=50,
+    )
+    return {"doctype": doctype, "rows": rows}
+
+
+@frappe.whitelist()
 def get_mapped_document_form(target_route_key, source_route_key, source_name):
     """Build an unsaved target from one source using ERPNext's native mapper."""
     return _build_mapped_document_form(
@@ -2519,8 +2569,8 @@ def get_delivery_challan_receipt_form(name):
         "delivery_challan_custom.delivery_challan_custom.doctype.delivery_challan_receipt.delivery_challan_receipt.make_delivery_challan_receipt"
     )
     result = maker(name)
-    receipt = result if hasattr(result, "doctype") else frappe.get_doc(result)
-    if receipt.doctype != "Delivery Challan Receipt":
+    receipt = frappe.get_doc(result) if isinstance(result, dict) else result
+    if not receipt or receipt.doctype != "Delivery Challan Receipt":
         frappe.throw(_("The native receipt mapper returned an unexpected document."))
     receipt.flags.ignore_permissions = False
     token = _store_mapped_document("delivery_receipts", receipt)
@@ -2949,16 +2999,19 @@ def _prepare_portal_document(doc):
             if row.meta.has_field("required_date") and not row.get("required_date"):
                 row.required_date = doc.get("required_date")
             _apply_portal_row_warehouses(doc, row)
-            if (
-                doc.doctype == "Purchase Receipt"
-                and row.meta.has_field("received_qty")
-                and not flt(row.get("received_qty"))
-            ):
-                row.received_qty = flt(row.get("qty"))
+            if doc.doctype == "Purchase Receipt" and row.meta.has_field("received_qty"):
+                received_qty = flt(row.get("qty")) + flt(row.get("rejected_qty"))
+                row.received_qty = flt(received_qty, row.precision("received_qty"))
+                if row.meta.has_field("received_stock_qty"):
+                    row.received_stock_qty = flt(
+                        received_qty * flt(row.get("conversion_factor") or 1),
+                        row.precision("received_stock_qty"),
+                    )
 
     set_missing_values = getattr(doc, "set_missing_values", None)
     if callable(set_missing_values):
         set_missing_values()
+    _set_purchase_order_company_address(doc)
     calculate_totals = getattr(doc, "calculate_taxes_and_totals", None)
     if (
         callable(calculate_totals)
@@ -2966,6 +3019,32 @@ def _prepare_portal_document(doc):
         and doc.meta.has_field("grand_total")
     ):
         calculate_totals()
+
+
+def _set_purchase_order_company_address(doc):
+    """Fill the native company billing address required by India GST validation."""
+    if (
+        doc.doctype != "Purchase Order"
+        or not doc.get("supplier")
+        or not doc.get("company")
+    ):
+        return
+
+    required_fields = ("billing_address", "billing_address_display", "company_gstin", "place_of_supply")
+    if all(not doc.meta.has_field(fieldname) or doc.get(fieldname) for fieldname in required_fields):
+        return
+
+    from erpnext.accounts.party import get_party_details
+
+    party_details = get_party_details(
+        party=doc.supplier,
+        party_type="Supplier",
+        company=doc.company,
+        doctype=doc.doctype,
+    )
+    for fieldname in required_fields:
+        if doc.meta.has_field(fieldname) and not doc.get(fieldname) and party_details.get(fieldname):
+            doc.set(fieldname, party_details.get(fieldname))
 
 
 def _apply_portal_row_warehouses(doc, row):

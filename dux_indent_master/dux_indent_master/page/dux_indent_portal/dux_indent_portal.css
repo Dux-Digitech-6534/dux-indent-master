@@ -143,20 +143,14 @@ body.dux-portal-active .duxp-root {
 	background: var(--duxp-surface);
 }
 
-.duxp-brand-logo {
-	display: block;
-	width: 220px;
+.duxp-brand-name {
 	max-width: 100%;
-	height: auto;
-	max-height: 64px;
-	mix-blend-mode: multiply;
-	object-fit: contain;
-	pointer-events: none;
-}
-
-.duxp-root[data-dux-theme="dark"] .duxp-brand-logo {
-	filter: invert(1) grayscale(1);
-	mix-blend-mode: screen;
+	color: var(--duxp-text);
+	font-size: 18px;
+	font-weight: 760;
+	line-height: 1.2;
+	letter-spacing: 0.01em;
+	text-align: center;
 }
 
 .duxp-nav-search {
@@ -663,6 +657,116 @@ body.dux-portal-active .duxp-root {
 .duxp-menu-item:hover {
 	background: var(--duxp-surface-3);
 	color: var(--duxp-iris);
+}
+
+.duxp-modal-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 500;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+	background: rgba(10, 13, 19, 0.45);
+}
+
+.duxp-modal {
+	width: 100%;
+	max-width: 520px;
+	max-height: 82vh;
+	display: flex;
+	flex-direction: column;
+	border-radius: 14px;
+	background: var(--duxp-surface);
+	box-shadow: var(--duxp-shadow-pop);
+	overflow: hidden;
+}
+
+.duxp-modal > header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 16px 18px;
+	border-bottom: 1px solid var(--duxp-border);
+}
+
+.duxp-modal > header h3 {
+	margin: 0;
+	font-size: 15px;
+	font-weight: 700;
+}
+
+.duxp-modal-body {
+	flex: 1;
+	overflow-y: auto;
+	padding: 14px 18px;
+}
+
+.duxp-modal > footer {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 9px;
+	padding: 14px 18px;
+	border-top: 1px solid var(--duxp-border);
+}
+
+.duxp-picker-search {
+	width: 100%;
+	margin-bottom: 12px;
+	padding: 0 12px;
+}
+
+.duxp-picker-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.duxp-picker-row {
+	display: flex;
+	align-items: center;
+	gap: 11px;
+	padding: 10px 12px;
+	border: 1px solid var(--duxp-border);
+	border-radius: 10px;
+	cursor: pointer;
+	transition: 0.15s ease;
+}
+
+.duxp-picker-row:hover {
+	border-color: var(--duxp-iris);
+	background: var(--duxp-iris-tint);
+}
+
+.duxp-picker-row input {
+	width: 16px;
+	height: 16px;
+	accent-color: var(--duxp-iris);
+}
+
+.duxp-picker-row-main {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.duxp-picker-row-main strong {
+	font-size: 13px;
+}
+
+.duxp-picker-row-main small {
+	color: var(--duxp-text-3);
+	font-size: 11.5px;
+}
+
+.duxp-picker-row-amount {
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--duxp-text-2);
+	white-space: nowrap;
 }
 
 .duxp-btn {
@@ -1690,6 +1794,54 @@ body.dux-portal-active .duxp-root {
 	display: flex;
 	align-items: center;
 	min-height: 38px;
+}
+
+.duxp-form-control [data-fieldtype="Check"] .checkbox,
+.duxp-form-control [data-fieldtype="Check"] .checkbox label {
+	margin: 0;
+}
+
+.duxp-form-control [data-fieldtype="Check"] .checkbox label {
+	min-height: 38px;
+	display: flex;
+	align-items: center;
+	cursor: pointer;
+}
+
+.duxp-form-control [data-fieldtype="Check"] .input-area {
+	display: inline-flex;
+	align-items: center;
+}
+
+.duxp-form-control [data-fieldtype="Check"] input[type="checkbox"],
+.duxp-form-control input[type="radio"] {
+	width: 18px !important;
+	min-width: 18px !important;
+	height: 18px !important;
+	min-height: 18px !important;
+	margin: 0 8px 0 0 !important;
+	border: 1.5px solid var(--duxp-border-strong) !important;
+	border-radius: 50% !important;
+	background: var(--duxp-surface) !important;
+	box-shadow: none !important;
+	appearance: none;
+	cursor: pointer;
+}
+
+.duxp-form-control [data-fieldtype="Check"] input[type="checkbox"]:checked,
+.duxp-form-control input[type="radio"]:checked {
+	border-color: var(--duxp-iris) !important;
+	background-color: var(--duxp-iris) !important;
+	background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 12 10' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1.5 5.3 4.5 8.2 10.5 1.8' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important;
+	background-repeat: no-repeat !important;
+	background-position: center !important;
+	background-size: 11px 9px !important;
+}
+
+.duxp-form-control [data-fieldtype="Check"] input[type="checkbox"]:focus-visible,
+.duxp-form-control input[type="radio"]:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 3px var(--duxp-iris-tint) !important;
 }
 
 .duxp-form-control .like-disabled-input,
