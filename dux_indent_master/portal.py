@@ -671,8 +671,8 @@ FORM_CONFIG = {
                     "custom_sap_remarks": {"force_editable": True},
                 },
             },
-            {"label": "Taxes and Charges", "position": "after_tables", "fields": ["taxes_and_charges"]},
-            {"label": "Totals", "position": "after_tables", "fields": ["grand_total", "in_words", "rounding_adjustment", "rounded_total", "advance_paid"]},
+            {"label": "Taxes and Charges", "position": "after_tables", "order": 1, "fields": ["taxes_and_charges"]},
+            {"label": "Totals", "position": "after_tables", "order": 3, "fields": ["grand_total", "in_words", "rounding_adjustment", "rounded_total", "advance_paid"]},
             {"label": "Supplier Address, Billing & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "billing_address", "billing_address_display", "contact_person", "contact_display", "contact_mobile", "contact_email", "place_of_supply"]},
             {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display"]},
         ],
@@ -682,7 +682,7 @@ FORM_CONFIG = {
                 "fields": ["item_code", "schedule_date", "qty", "uom", "conversion_factor", "rate", "amount", "description"],
                 "field_overrides": {"amount": {"force_read_only": True}},
             },
-            {"fieldname": "taxes", "fields": ["category", "add_deduct_tax", "charge_type", "account_head", "description", "rate", "tax_amount"]},
+            {"fieldname": "taxes", "position": "after_tables", "order": 2, "fields": ["category", "add_deduct_tax", "charge_type", "account_head", "description", "rate", "tax_amount"]},
         ],
     },
     "purchase_receipt": {
@@ -1881,6 +1881,7 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
                     "collapsible": bool(section.get("collapsible")),
                     "collapsed": bool(section.get("collapsed")),
                     "position": section.get("position") or "before_tables",
+                    "order": section.get("order") or 0,
                     "tab": section.get("tab") or "details",
                     "tab_label": _(section.get("tab_label") or "Details"),
                 }
@@ -1934,6 +1935,8 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
                 "label": _(table_df.label or table_config["fieldname"]),
                 "doctype": table_df.options,
                 "reqd": bool(table_df.reqd),
+                "position": table_config.get("position") or "before_tables",
+                "order": table_config.get("order") or 0,
                 "fields": child_fields,
                 "rows": rows,
             }

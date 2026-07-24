@@ -1415,7 +1415,12 @@ class DuxProcurementPortal {
 				</div>
 			</div>
 		`);
-		$overlay.find(".duxp-modal").on("click", (event) => event.stopPropagation());
+		const $modalBox = $overlay.find(".duxp-modal");
+		$modalBox.on("click", (event) => {
+			if (!$(event.target).closest("[data-action]", $modalBox[0]).length) {
+				event.stopPropagation();
+			}
+		});
 		this.$root.append($overlay);
 	}
 
@@ -1484,13 +1489,20 @@ class DuxProcurementPortal {
 				.filter((section) => section.position !== "after_tables")
 				.map((section) => this.render_form_section(section, panel_index++))
 				.join("");
-			const tables = tab.key === "details"
-				? (data.tables || []).map((table) => this.render_form_table(table, panel_index++)).join("")
-				: "";
-			const after_sections = tab_sections
-				.filter((section) => section.position === "after_tables")
-				.map((section) => this.render_form_section(section, panel_index++))
+			const tab_tables = tab.key === "details" ? (data.tables || []) : [];
+			const tables = tab_tables
+				.filter((table) => table.position !== "after_tables")
+				.map((table) => this.render_form_table(table, panel_index++))
 				.join("");
+			const after_items = [
+				...tab_sections
+					.filter((section) => section.position === "after_tables")
+					.map((section) => ({ order: section.order || 0, render: () => this.render_form_section(section, panel_index++) })),
+				...tab_tables
+					.filter((table) => table.position === "after_tables")
+					.map((table) => ({ order: table.order || 0, render: () => this.render_form_table(table, panel_index++) })),
+			].sort((a, b) => a.order - b.order);
+			const after_sections = after_items.map((item) => item.render()).join("");
 			return `<div class="duxp-form-tab-panel ${tab_index === 0 ? "is-active" : ""}"
 				data-form-tab-panel="${this.escape(tab.key)}" ${tab_index === 0 ? "" : "hidden"}>
 				${before_sections}${tables}${after_sections}
