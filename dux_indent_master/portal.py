@@ -106,7 +106,7 @@ DOCUMENT_CONFIG = {
             _column("Required By", "schedule_date"),
             _column("Company", "company"),
             _column("Warehouse", "set_warehouse"),
-            _column("Dux Indent Master", "custom_dux_indent_master"),
+            _column("Material Indent", "custom_dux_indent_master"),
             _column("Requested By", "custom_dux_indent_user", "owner"),
             _column("Department", "custom_dux_indent_department"),
             _column("Status", "status"),
@@ -365,7 +365,7 @@ DOCUMENT_CONFIG = {
             _column("Transit Warehouse", "transit_warehouse"),
             _column("Vehicle Number", "vehicle_no"),
             _column("Driver Name", "driver_name"),
-            _column("Dux Indent Master", "custom_dux_indent_master"),
+            _column("Material Indent", "custom_dux_indent_master"),
             _column("Dispatch Stock Entry", "dispatch_stock_entry"),
             _column("Status", "status"),
             _column("Remarks", "remarks"),
@@ -442,7 +442,7 @@ DOCUMENT_CONFIG = {
         "search_fields": ["name", "delivery_challan", "received_by", "stock_entry"],
     },
     "dux_indent_master": {
-        "label": "Dux Indent Master",
+        "label": "Material Indent",
         "menu_label": "Material Indent",
         "doctype": "Dux Indent Master",
         "icon": "clipboard",
@@ -737,7 +737,7 @@ FORM_CONFIG = {
         "sections": [
             {"label": "Delivery Details", "fields": ["company", "posting_date", "source_warehouse", "transit_warehouse", "target_warehouse", "project", "cost_center", "remarks"]},
             {"label": "Indent Reference", "fields": ["custom_dux_indent_master", "custom_dux_indent_required_date"]},
-            {"label": "Transport", "fields": ["vehicle_no", "driver_name", "driver_mobile", "transporter", "lr_no", "dispatch_from_address", "dispatch_to_address"]},
+            {"label": "Transport", "fields": ["vehicle_no", "driver_name", "driver_mobile", "transporter", "lr_no", "custom_no_of_pages", "custom_transport_gst_no", "custom_mode_of_dispatch", "dispatch_from_address", "dispatch_to_address"]},
             {"label": "Dispatch & Receipt Tracking", "fields": ["dispatch_stock_entry", "dispatched_by", "dispatch_datetime", "receipt_stock_entries", "received_by", "receipt_datetime", "shortage_stock_entry", "shortage_closure_type", "shortage_reason"]},
         ],
         "tables": [
