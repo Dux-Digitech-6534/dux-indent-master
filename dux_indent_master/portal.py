@@ -468,7 +468,6 @@ DOCUMENT_CONFIG = {
             _column("Manually Closed", "manually_closed"),
             _column("Closed By", "closed_by"),
             _column("Closed On", "closed_on"),
-            _column("Remark", "remark"),
             _column("Note Attachment", "note_attachment"),
             _column("Design Attachment", "design_attachment"),
         ],
@@ -480,12 +479,8 @@ DOCUMENT_CONFIG = {
                     _column("Item", "item_code"),
                     _column("Quantity", "qty"),
                     _column("UOM", "uom"),
-                    _column("Required Date", "required_date"),
                     _column("Stock Qty", "stock_qty"),
                     _column("Warehouse", "warehouse", "source_warehouse"),
-                    _column("MR Qty", "material_request_qty", "purchase_qty"),
-                    _column("Ordered Qty", "ordered_qty"),
-                    _column("Received Qty", "received_qty"),
                     _column("Specification", "specification"),
                 ],
             },
@@ -749,10 +744,10 @@ FORM_CONFIG = {
             {"label": "Indent Details", "fields": ["naming_series", "user_full_name", "department_name", "company_name", "transaction_date", "required_date"]},
             {
                 "label": "Notes & Attachments",
-                "fields": ["note_attachment", "design_attachment", "remark"],
+                "fields": ["note_attachment", "design_attachment"],
                 "field_overrides": {
-                    "note_attachment": {"label": "Attach Note"},
-                    "design_attachment": {"label": "Attach Design"},
+                    "note_attachment": {"label": "Add Image"},
+                    "design_attachment": {"label": "Add More"},
                 },
             },
         ],
@@ -760,7 +755,7 @@ FORM_CONFIG = {
             {
                 "fieldname": "items",
                 "fields": [
-                    "item_code", "required_date", "qty", "purchase_qty", "qty_balanced",
+                    "item_code", "qty",
                     "uom", "warehouse", "specification", "stock_qty",
                 ],
                 "field_overrides": {"warehouse": {"reqd": True}},
@@ -955,7 +950,7 @@ def get_dashboard():
                     "name": row.name,
                     "date": row.get(date_field) if date_field else row.modified,
                     "modified": row.modified,
-                    "status": row.get("status") or _docstatus_label(row.docstatus),
+                    "status": _display_status_value(row.get("status"), row.docstatus),
                 }
             )
 
@@ -1046,6 +1041,9 @@ def get_document_list(
         start=start,
         page_length=page_length,
     )
+    if any(column["fieldname"] == "status" for column in columns):
+        for row in rows:
+            row.status = _display_status_value(row.get("status"), row.docstatus)
     if any(column["fieldname"] == "docstatus" for column in columns):
         for row in rows:
             row.docstatus = _docstatus_label(row.docstatus)
@@ -1621,7 +1619,7 @@ def _get_linked_documents(doc):
                 "doctype": entry["doctype"],
                 "route_key": entry["route_key"],
                 "name": entry["name"],
-                "status": linked_doc.get("status") or _docstatus_label(linked_doc.docstatus),
+                "status": _display_status_value(linked_doc.get("status"), linked_doc.docstatus),
                 "modified": linked_doc.modified,
                 "relations": sorted(entry["relations"]),
             }
@@ -1782,7 +1780,7 @@ def get_document_detail(route_key, name):
         "name": doc.name,
         "label": _(config["label"]),
         "description": _(config["description"]),
-        "status": workflow["state"] or doc.get("status") or _docstatus_label(doc.docstatus),
+        "status": workflow["state"] or _display_status_value(doc.get("status"), doc.docstatus),
         "docstatus": doc.docstatus,
         "fields": fields,
         "child_tables": child_tables,
@@ -1952,7 +1950,7 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
         "description": _(config["description"]),
         "is_new": not bool(name),
         "docstatus": doc.docstatus,
-        "status": doc.get("status") or _docstatus_label(doc.docstatus),
+        "status": _display_status_value(doc.get("status"), doc.docstatus),
         "sections": sections,
         "tables": tables,
         "can_save": can_save,
@@ -2209,7 +2207,7 @@ def save_portal_document(route_key, values, name=None, mapping_token=None):
     return {
         "doctype": doctype,
         "name": doc.name,
-        "status": doc.get("status") or _docstatus_label(doc.docstatus),
+        "status": _display_status_value(doc.get("status"), doc.docstatus),
         "docstatus": doc.docstatus,
         "can_submit": bool(submit_action),
         "submit_action": submit_action["action"] if submit_action else None,
@@ -2251,7 +2249,7 @@ def submit_portal_document(route_key, name, workflow_action=None):
     return {
         "doctype": doc.doctype,
         "name": doc.name,
-        "status": doc.get("workflow_state") or doc.get("status") or _docstatus_label(doc.docstatus),
+        "status": doc.get("workflow_state") or _display_status_value(doc.get("status"), doc.docstatus),
         "docstatus": doc.docstatus,
         "workflow_state": doc.get("workflow_state"),
     }
@@ -2279,7 +2277,7 @@ def apply_portal_workflow_action(route_key, name, action):
     return {
         "doctype": doc.doctype,
         "name": doc.name,
-        "status": doc.get("status") or _docstatus_label(doc.docstatus),
+        "status": _display_status_value(doc.get("status"), doc.docstatus),
         "docstatus": doc.docstatus,
         "workflow_state": doc.get("workflow_state"),
     }
@@ -2329,7 +2327,7 @@ def update_portal_document_status(route_key, name, action, reason=None):
     return {
         "doctype": doc.doctype,
         "name": doc.name,
-        "status": doc.get("status") or _docstatus_label(doc.docstatus),
+        "status": _display_status_value(doc.get("status"), doc.docstatus),
         "docstatus": doc.docstatus,
     }
 
@@ -2350,7 +2348,7 @@ def cancel_portal_document(route_key, name):
     return {
         "doctype": doc.doctype,
         "name": doc.name,
-        "status": doc.get("status") or _docstatus_label(doc.docstatus),
+        "status": _display_status_value(doc.get("status"), doc.docstatus),
         "docstatus": doc.docstatus,
     }
 
@@ -2524,7 +2522,7 @@ def append_delivery_challan_material(
     if row.meta.has_field("pending_qty"):
         row.pending_qty = flt(qty)
     doc.save()
-    return {"name": doc.name, "status": doc.get("status") or _docstatus_label(doc.docstatus)}
+    return {"name": doc.name, "status": _display_status_value(doc.get("status"), doc.docstatus)}
 
 
 @frappe.whitelist()
@@ -2557,7 +2555,7 @@ def run_delivery_challan_action(name, action, closure_type=None, shortage_reason
     doc.reload()
     return {
         "name": doc.name,
-        "status": doc.get("status") or _docstatus_label(doc.docstatus),
+        "status": _display_status_value(doc.get("status"), doc.docstatus),
         "result": result,
     }
 
@@ -3230,11 +3228,20 @@ def _docstatus_label(docstatus):
     return {0: "Draft", 1: "Submitted", 2: "Cancelled"}.get(cint(docstatus), "Draft")
 
 
+def _display_status_value(status, docstatus):
+    """Dux Indent Master's "Approved" status reads as jargon in the portal;
+    show it as "Submitted" everywhere status text is displayed."""
+    value = status or _docstatus_label(docstatus)
+    return _("Submitted") if value == "Approved" else value
+
+
 def _resolve_display_value(column, value):
     """Show a User's full name instead of their raw email/ID wherever a
     Link-to-User field is displayed (list columns, detail fields, child rows)."""
     if value and column.get("fieldtype") == "Link" and column.get("options") == "User":
         return frappe.get_cached_value("User", value, "full_name") or value
+    if column.get("fieldname") == "status" and value == "Approved":
+        return _("Submitted")
     return value
 
 
