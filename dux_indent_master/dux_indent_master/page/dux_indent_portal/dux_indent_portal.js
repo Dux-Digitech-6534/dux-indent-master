@@ -1515,7 +1515,7 @@ class DuxProcurementPortal {
 		` : "";
 
 		const form_notice = data.is_closed
-			? __("This Dux Indent Master is Closed. Every field and item row is locked, and procurement actions are disabled.")
+			? __("This Material Indent is Closed. Every field and item row is locked, and procurement actions are disabled.")
 			: data.docstatus === 2
 			? __("This document is cancelled and read-only. Use Amend from the document view to make a corrected copy.")
 			: data.docstatus === 1 && data.can_update_after_submit
