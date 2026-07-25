@@ -1828,6 +1828,13 @@ def get_document_form(route_key, name=None):
         doc = frappe.new_doc(doctype)
         if route_key == "material_request":
             doc.material_request_type = "Purchase"
+            # frappe.new_doc() auto-fills "company" from the user's default
+            # Company; this portal wants Company/Warehouse picked only on the
+            # Purchase Order, so clear whatever Frappe pre-filled here.
+            doc.company = None
+            for warehouse_field in ("set_warehouse", "set_from_warehouse"):
+                if doc.meta.has_field(warehouse_field):
+                    doc.set(warehouse_field, None)
         elif doctype == "Dux Indent Master":
             details = _get_logged_in_user_details()
             if doc.meta.has_field("user_name"):

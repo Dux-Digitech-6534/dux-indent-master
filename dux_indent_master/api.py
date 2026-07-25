@@ -209,8 +209,10 @@ def create_material_request_from_indent(indent_name, selected_items):
     rows_by_name = {row.name: row for row in indent.get("items") or []}
     mr = frappe.new_doc("Material Request")
     mr.material_request_type = "Purchase"
+    # frappe.new_doc() auto-fills "company" from the user's default Company;
+    # Company/Warehouse are picked only on the Purchase Order, so clear it.
+    mr.company = None
     mr.transaction_date = nowdate()
-    warehouses = []
 
     if mr.meta.has_field("schedule_date"):
         mr.schedule_date = indent.required_date
@@ -243,20 +245,10 @@ def create_material_request_from_indent(indent_name, selected_items):
         )
         if row.uom:
             item.uom = row.uom
-        warehouse = _get_row_warehouse(row)
-        _set_if_field(item, "warehouse", warehouse)
-        if warehouse:
-            warehouses.append(warehouse)
         _set_if_field(item, "custom_dux_indent_master", indent.name)
         _set_if_field(item, "custom_dux_indent_item", row.name)
         _set_material_request_item_specification(item, row.specification)
         total_qty += purchase_qty
-
-    unique_warehouses = set(warehouses)
-    if len(unique_warehouses) == 1:
-        warehouse = next(iter(unique_warehouses))
-        _set_if_field(mr, "set_warehouse", warehouse)
-        mr.company = frappe.db.get_value("Warehouse", warehouse, "company")
 
     mr.insert()
 
