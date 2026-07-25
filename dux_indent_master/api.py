@@ -209,7 +209,6 @@ def create_material_request_from_indent(indent_name, selected_items):
     rows_by_name = {row.name: row for row in indent.get("items") or []}
     mr = frappe.new_doc("Material Request")
     mr.material_request_type = "Purchase"
-    mr.company = indent.company_name
     mr.transaction_date = nowdate()
     warehouses = []
 
@@ -255,7 +254,9 @@ def create_material_request_from_indent(indent_name, selected_items):
 
     unique_warehouses = set(warehouses)
     if len(unique_warehouses) == 1:
-        _set_if_field(mr, "set_warehouse", next(iter(unique_warehouses)))
+        warehouse = next(iter(unique_warehouses))
+        _set_if_field(mr, "set_warehouse", warehouse)
+        mr.company = frappe.db.get_value("Warehouse", warehouse, "company")
 
     mr.insert()
 

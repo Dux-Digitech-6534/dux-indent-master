@@ -1246,7 +1246,7 @@ class DuxProcurementPortal {
 					{
 						fieldname: "items_html",
 						fieldtype: "HTML",
-						options: `<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr><th>${__("Item Name")}</th><th>${__("DC Qty")}</th></tr></thead><tbody>${rows}</tbody></table></div>`,
+						options: `<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr><th>${__("Item Name")}</th><th>${__("Indent Qty")}</th></tr></thead><tbody>${rows}</tbody></table></div>`,
 					},
 				],
 				primary_action_label: __("Create Delivery Challan"),
@@ -1262,9 +1262,9 @@ class DuxProcurementPortal {
 						if (qty > 0) selected.push({ item_row: $(element).data("row-name"), qty });
 					});
 					if (invalid_quantity) {
-						return frappe.msgprint(__("DC Qty cannot exceed the indent quantity."));
+						return frappe.msgprint(__("Indent Qty cannot exceed the indent quantity."));
 					}
-					if (!selected.length) return frappe.msgprint(__("Enter DC Qty for at least one item."));
+					if (!selected.length) return frappe.msgprint(__("Enter Indent Qty for at least one item."));
 					dialog.get_primary_btn().prop("disabled", true);
 					try {
 						const result = await this.call("dux_indent_master.portal.create_delivery_challan_from_portal_indent", {
