@@ -3008,6 +3008,41 @@ def _prepare_portal_document(doc):
         if doc.meta.has_field(exchange_field) and not flt(doc.get(exchange_field)):
             doc.set(exchange_field, 1)
 
+    # A document mapped from another company (e.g. a Material Request created
+    # under one company) can carry cost centers/warehouses that no longer
+    # belong to the company picked afterwards on this form. Re-align them
+    # instead of letting the native controller reject the whole save.
+    company = doc.get("company")
+    if company:
+        default_cost_center = frappe.get_cached_value("Company", company, "cost_center")
+
+        def _realign_cost_center(row):
+            current = row.get("cost_center")
+            if current and frappe.get_cached_value("Cost Center", current, "company") != company:
+                row.cost_center = default_cost_center
+
+        def _realign_warehouse(row, fieldname):
+            current = row.get(fieldname)
+            if current and frappe.get_cached_value("Warehouse", current, "company") != company:
+                row.set(fieldname, None)
+
+        if doc.meta.has_field("cost_center"):
+            _realign_cost_center(doc)
+        for warehouse_field in ("set_warehouse", "supplier_warehouse", "set_from_warehouse"):
+            if doc.meta.has_field(warehouse_field):
+                _realign_warehouse(doc, warehouse_field)
+
+        for table_df in doc.meta.fields:
+            if table_df.fieldtype != "Table":
+                continue
+            child_meta = frappe.get_meta(table_df.options)
+            for row in doc.get(table_df.fieldname) or []:
+                if child_meta.has_field("cost_center"):
+                    _realign_cost_center(row)
+                for warehouse_field in ("warehouse", "source_warehouse", "target_warehouse", "from_warehouse"):
+                    if child_meta.has_field(warehouse_field):
+                        _realign_warehouse(row, warehouse_field)
+
     if doc.meta.has_field("items"):
         for row in doc.get("items") or []:
             if not row.get("item_code"):
