@@ -269,7 +269,7 @@ def create_material_request_from_indent(indent_name, selected_items):
 
 
 @frappe.whitelist()
-def create_delivery_challan_from_indent(indent_name, selected_items=None, company=None):
+def create_delivery_challan_from_indent(indent_name, selected_items=None, company=None, warehouse=None):
     if not indent_name or not frappe.db.exists("Dux Indent Master", indent_name):
         frappe.throw(_("Save Dux Indent Master before creating a Delivery Challan."))
 
@@ -320,21 +320,16 @@ def create_delivery_challan_from_indent(indent_name, selected_items=None, compan
     if not rows:
         frappe.throw(_("No delivery balance quantity is available for Delivery Challan."))
 
-    warehouses = [_get_row_warehouse(row) for row, balance_qty, requested in rows]
-    missing_warehouse_rows = [
-        row.idx or row.item_code
-        for (row, balance_qty, requested), warehouse in zip(rows, warehouses)
-        if not warehouse
-    ]
-    if missing_warehouse_rows:
-        frappe.throw(
-            _("Warehouse is mandatory for Delivery Challan rows: {0}.").format(
-                ", ".join(str(row) for row in missing_warehouse_rows)
-            )
-        )
+    company = cstr(company).strip() or indent.company_name
+    if not company:
+        frappe.throw(_("Select a Company for the Delivery Challan."))
+    warehouse = cstr(warehouse).strip()
+    if not warehouse:
+        frappe.throw(_("Select a Warehouse for the Delivery Challan."))
+    transit_warehouse = _get_delivery_challan_transit_warehouse(company)
 
     delivery_rows = []
-    for (row, balance_qty, requested), warehouse in zip(rows, warehouses):
+    for row, balance_qty, requested in rows:
         qty = flt(requested) if requested is not None else flt(balance_qty)
         if qty <= 0:
             continue
@@ -343,18 +338,12 @@ def create_delivery_challan_from_indent(indent_name, selected_items=None, compan
     if not delivery_rows:
         frappe.throw(_("No delivery balance quantity is available for Delivery Challan."))
 
-    company = cstr(company).strip() or indent.company_name
-    if not company:
-        frappe.throw(_("Select a Company for the Delivery Challan."))
-    transit_warehouse = _get_delivery_challan_transit_warehouse(company)
-    default_warehouse = delivery_rows[0][2]
-
     delivery_challan = frappe.new_doc("Delivery Challan")
     delivery_challan.company = company
     delivery_challan.posting_date = nowdate()
     delivery_challan.posting_time = nowtime()
-    delivery_challan.source_warehouse = default_warehouse
-    delivery_challan.target_warehouse = default_warehouse
+    delivery_challan.source_warehouse = warehouse
+    delivery_challan.target_warehouse = warehouse
     delivery_challan.transit_warehouse = transit_warehouse
     _set_delivery_challan_remark(delivery_challan, indent)
     _set_if_field(delivery_challan, "custom_dux_indent_master", indent.name)

@@ -1242,6 +1242,15 @@ class DuxProcurementPortal {
 						label: __("Company"),
 						reqd: 1,
 						default: data.company || frappe.defaults.get_default("company") || undefined,
+						onchange: () => dialog.set_value("warehouse", ""),
+					},
+					{
+						fieldname: "warehouse",
+						fieldtype: "Link",
+						options: "Warehouse",
+						label: __("Warehouse"),
+						reqd: 1,
+						get_query: () => ({ filters: { company: dialog.get_value("company") || undefined, is_group: 0 } }),
 					},
 					{
 						fieldname: "items_html",
@@ -1253,6 +1262,8 @@ class DuxProcurementPortal {
 				primary_action: async () => {
 					const company = dialog.get_value("company");
 					if (!company) return frappe.msgprint(__("Select a Company."));
+					const warehouse = dialog.get_value("warehouse");
+					if (!warehouse) return frappe.msgprint(__("Select a Warehouse."));
 					const selected = [];
 					let invalid_quantity = false;
 					dialog.$wrapper.find("tr[data-row-name]").each((index, element) => {
@@ -1268,7 +1279,7 @@ class DuxProcurementPortal {
 					dialog.get_primary_btn().prop("disabled", true);
 					try {
 						const result = await this.call("dux_indent_master.portal.create_delivery_challan_from_portal_indent", {
-							name, selected_items: JSON.stringify(selected), company,
+							name, selected_items: JSON.stringify(selected), company, warehouse,
 						});
 						const document_name = result.name || result.delivery_challan;
 						if (!document_name) throw new Error(__("Delivery Challan was not returned."));

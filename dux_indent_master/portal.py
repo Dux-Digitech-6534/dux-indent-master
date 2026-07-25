@@ -95,7 +95,6 @@ DOCUMENT_CONFIG = {
             _column("Material Request", "name"),
             _column("Transaction Date", "transaction_date"),
             _column("Required By", "schedule_date"),
-            _column("Company", "company"),
             _column("Requested By", "custom_dux_indent_user", "owner"),
             _column("Status", "status"),
         ],
@@ -104,10 +103,8 @@ DOCUMENT_CONFIG = {
             _column("Type", "material_request_type"),
             _column("Transaction Date", "transaction_date"),
             _column("Required By", "schedule_date"),
-            _column("Company", "company"),
             _column("Project", "custom_site_project"),
             _column("Town", "custom_town"),
-            _column("Warehouse", "set_warehouse"),
             _column("Material Indent", "custom_dux_indent_master"),
             _column("Requested By", "custom_dux_indent_user", "owner"),
             _column("Department", "custom_dux_indent_department"),
@@ -455,7 +452,6 @@ DOCUMENT_CONFIG = {
             _column("Indent ID", "name"),
             _column("Transaction Date", "transaction_date"),
             _column("Required Date", "required_date"),
-            _column("Company", "company_name"),
             _column("Requested By", "user_full_name", "user_name"),
             _column("Department", "department_name"),
             _column("Status", "status"),
@@ -464,7 +460,6 @@ DOCUMENT_CONFIG = {
             _column("Indent ID", "name"),
             _column("Transaction Date", "transaction_date"),
             _column("Required Date", "required_date"),
-            _column("Company", "company_name"),
             _column("Project", "custom_site_project"),
             _column("Town", "custom_town"),
             _column("Requested By", "user_full_name", "user_name"),
@@ -485,7 +480,6 @@ DOCUMENT_CONFIG = {
                     _column("Quantity", "qty"),
                     _column("UOM", "uom"),
                     _column("Stock Qty", "stock_qty"),
-                    _column("Warehouse", "warehouse", "source_warehouse"),
                     _column("Specification", "specification"),
                 ],
             },
@@ -623,10 +617,8 @@ FORM_CONFIG = {
                     "customer",
                     "transaction_date",
                     "schedule_date",
-                    "company",
                     "custom_site_project",
                     "custom_town",
-                    "set_from_warehouse",
                     "custom_dux_indent_remark",
                 ],
                 "field_overrides": {
@@ -654,7 +646,7 @@ FORM_CONFIG = {
                 "fieldname": "items",
                 "fields": [
                     "item_code", "schedule_date", "qty", "uom",
-                    "from_warehouse", "custom_dux_indent_specification", "description",
+                    "custom_dux_indent_specification", "description",
                 ],
                 "field_overrides": {
                     "schedule_date": {"label": "Required Date", "force_read_only": True},
@@ -763,9 +755,8 @@ FORM_CONFIG = {
                 "fieldname": "items",
                 "fields": [
                     "item_code", "qty",
-                    "uom", "warehouse", "specification", "stock_qty",
+                    "uom", "specification", "stock_qty",
                 ],
-                "field_overrides": {"warehouse": {"reqd": True}},
             },
         ],
     },
@@ -2708,7 +2699,7 @@ def get_dux_indent_delivery_action_data(name):
 
 
 @frappe.whitelist()
-def create_delivery_challan_from_portal_indent(name, selected_items, company=None):
+def create_delivery_challan_from_portal_indent(name, selected_items, company=None, warehouse=None):
     _require_authenticated_user()
     doc = frappe.get_doc("Dux Indent Master", name)
     doc.check_permission("read")
@@ -2722,6 +2713,11 @@ def create_delivery_challan_from_portal_indent(name, selected_items, company=Non
         frappe.throw(_("Select a Company for the Delivery Challan."))
     if not frappe.db.exists("Company", company):
         frappe.throw(_("Invalid Company."))
+    warehouse = cstr(warehouse).strip()
+    if not warehouse:
+        frappe.throw(_("Select a Warehouse for the Delivery Challan."))
+    if not frappe.db.exists("Warehouse", warehouse):
+        frappe.throw(_("Invalid Warehouse."))
     allowed = {row.name for row in doc.get("items") or []}
     selected_items = frappe.parse_json(selected_items) if isinstance(selected_items, str) else selected_items
     if not isinstance(selected_items, list):
@@ -2742,7 +2738,7 @@ def create_delivery_challan_from_portal_indent(name, selected_items, company=Non
     if not cleaned:
         frappe.throw(_("Enter Delivery Challan quantity for at least one item."))
     method = frappe.get_attr("dux_indent_master.api.create_delivery_challan_from_indent")
-    return method(name, cleaned, company=company)
+    return method(name, cleaned, company=company, warehouse=warehouse)
 
 
 @frappe.whitelist()
