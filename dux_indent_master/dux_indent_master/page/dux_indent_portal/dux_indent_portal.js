@@ -1648,7 +1648,7 @@ class DuxProcurementPortal {
 				return option_control ? option_control.get_value() : "";
 			};
 		}
-		if (df.fieldtype === "Link" && ["Warehouse", "Account", "Cost Center"].includes(df.options)) {
+		if (df.fieldtype === "Link" && ["Warehouse", "Account", "Cost Center", "Town At Project"].includes(df.options)) {
 			df.get_query = () => ({ filters: this.link_filters(df.options) });
 		}
 		const control = frappe.ui.form.make_control({ df, parent: $slot, render_input: true });
@@ -1672,8 +1672,17 @@ class DuxProcurementPortal {
 	link_filters(options) {
 		const filters = {};
 		const company = this.form_company_value();
-		if (["Warehouse", "Account", "Cost Center"].includes(options)) filters.is_group = 0;
-		if (company) filters.company = company;
+		if (["Warehouse", "Account", "Cost Center"].includes(options)) {
+			filters.is_group = 0;
+			if (company) filters.company = company;
+		} else if (options === "Town At Project") {
+			const site_project_control = this.form_controls["custom_site_project"];
+			const site_project_value = site_project_control ? site_project_control.get_value() : "";
+			filters.project_name = site_project_value || ["in", []];
+			if (company) filters.company_name = company;
+		} else if (company) {
+			filters.company = company;
+		}
 		return filters;
 	}
 

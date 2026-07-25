@@ -222,6 +222,8 @@ def create_material_request_from_indent(indent_name, selected_items):
     _set_if_field(mr, "custom_dux_indent_note_attachment", indent.note_attachment)
     _set_if_field(mr, "custom_dux_indent_design_attachment", indent.design_attachment)
     _set_if_field(mr, "custom_dux_indent_remark", indent.remark)
+    _set_if_field(mr, "custom_site_project", indent.get("custom_site_project"))
+    _set_if_field(mr, "custom_town", indent.get("custom_town"))
 
     total_qty = 0
     for row_name, purchase_qty in quantities.items():

@@ -105,6 +105,8 @@ DOCUMENT_CONFIG = {
             _column("Transaction Date", "transaction_date"),
             _column("Required By", "schedule_date"),
             _column("Company", "company"),
+            _column("Project", "custom_site_project"),
+            _column("Town", "custom_town"),
             _column("Warehouse", "set_warehouse"),
             _column("Material Indent", "custom_dux_indent_master"),
             _column("Requested By", "custom_dux_indent_user", "owner"),
@@ -152,7 +154,8 @@ DOCUMENT_CONFIG = {
             _column("Currency", "currency"),
             _column("Grand Total", "grand_total"),
             _column("Status", "status"),
-            _column("Project", "project"),
+            _column("Project", "custom_site_project"),
+            _column("Town", "custom_town"),
         ],
         "child_tables": [
             {
@@ -462,6 +465,8 @@ DOCUMENT_CONFIG = {
             _column("Transaction Date", "transaction_date"),
             _column("Required Date", "required_date"),
             _column("Company", "company_name"),
+            _column("Project", "custom_site_project"),
+            _column("Town", "custom_town"),
             _column("Requested By", "user_full_name", "user_name"),
             _column("Department", "department_name"),
             _column("Status", "status"),
@@ -619,6 +624,8 @@ FORM_CONFIG = {
                     "transaction_date",
                     "schedule_date",
                     "company",
+                    "custom_site_project",
+                    "custom_town",
                     "set_from_warehouse",
                     "custom_dux_indent_remark",
                 ],
@@ -660,7 +667,7 @@ FORM_CONFIG = {
         "sections": [
             {
                 "label": "Supplier & Schedule",
-                "fields": ["naming_series", "supplier", "transaction_date", "schedule_date", "company", "supplier_warehouse", "set_warehouse", "custom_sap_po_no", "custom_sap_remarks"],
+                "fields": ["naming_series", "supplier", "transaction_date", "schedule_date", "company", "custom_site_project", "custom_town", "supplier_warehouse", "set_warehouse", "custom_sap_po_no", "custom_sap_remarks"],
                 "field_overrides": {
                     "custom_sap_po_no": {"force_editable": True},
                     "custom_sap_remarks": {"force_editable": True},
@@ -741,7 +748,7 @@ FORM_CONFIG = {
     },
     "dux_indent_master": {
         "sections": [
-            {"label": "Indent Details", "fields": ["naming_series", "user_full_name", "department_name", "company_name", "transaction_date", "required_date"]},
+            {"label": "Indent Details", "fields": ["naming_series", "user_full_name", "department_name", "custom_site_project", "custom_town", "transaction_date", "required_date"]},
             {
                 "label": "Notes & Attachments",
                 "fields": ["note_attachment", "design_attachment"],
@@ -2073,6 +2080,14 @@ def _build_mapped_document_form(
                 original_date = source_schedule_dates.get(target_row.material_request_item)
                 if original_date:
                     target_row.schedule_date = original_date
+
+        # Carry the Project/Town picked on the Material Request onto the PO too,
+        # so it doesn't need to be re-selected.
+        for source_doc in source_docs:
+            if source_doc.get("custom_site_project"):
+                target_doc.custom_site_project = source_doc.custom_site_project
+                target_doc.custom_town = source_doc.get("custom_town")
+                break
 
     target_doc.flags.ignore_permissions = False
     token = _store_mapped_document(target_route_key, target_doc)
