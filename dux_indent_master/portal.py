@@ -1903,7 +1903,8 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
                 fieldname in ("schedule_date", "required_date")
                 and meta.has_field(fieldname)
             ):
-                field_override["force_read_only"] = True
+                if route_key != "purchase_order":
+                    field_override["force_read_only"] = True
                 if fieldname == "schedule_date":
                     field_override.setdefault("label", "Required Date")
             field = _serialize_form_field(
@@ -2057,6 +2058,21 @@ def _build_mapped_document_form(
         frappe.throw(_("ERPNext could not create the mapped document."))
     if not target_doc.get("items"):
         frappe.throw(_("All source items are already processed."))
+
+    if target_route_key == "purchase_order" and source_route_key == "material_request":
+        # ERPNext's native mapper blanks schedule_date when the source Required
+        # Date has already passed; the portal wants the original date carried
+        # over anyway (still editable) instead of forcing the user to re-enter it.
+        source_schedule_dates = {}
+        for source_doc in source_docs:
+            for row in source_doc.get("items") or []:
+                if row.name and row.get("schedule_date"):
+                    source_schedule_dates[row.name] = row.schedule_date
+        for target_row in target_doc.get("items") or []:
+            if not target_row.get("schedule_date") and target_row.get("material_request_item"):
+                original_date = source_schedule_dates.get(target_row.material_request_item)
+                if original_date:
+                    target_row.schedule_date = original_date
 
     target_doc.flags.ignore_permissions = False
     token = _store_mapped_document(target_route_key, target_doc)
