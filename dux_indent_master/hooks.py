@@ -18,6 +18,7 @@ doc_events = {
         "on_cancel": "dux_indent_master.api.on_material_request_cancel",
     },
     "Purchase Order": {
+        "validate": "dux_indent_master.api.sync_material_request_company",
         "on_submit": "dux_indent_master.api.on_purchase_order_submit",
         "on_cancel": "dux_indent_master.api.on_purchase_order_cancel",
     },

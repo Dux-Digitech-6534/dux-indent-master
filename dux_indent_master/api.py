@@ -424,6 +424,78 @@ def on_purchase_order_cancel(doc, method=None):
     _recalculate_linked_indent_statuses(_get_purchase_order_indent_names(doc), ignore_links=True)
 
 
+def _resolve_town_warehouse(company, custom_town):
+    """Match a Town At Project's town name to a Warehouse under the given
+    Company. There is no formal foreign key for this - Warehouse.warehouse_name
+    is expected to match Town At Project.town_name by naming convention."""
+    if not custom_town:
+        frappe.throw(_("Select a Town before changing Company."))
+
+    town = frappe.get_cached_doc("Town At Project", custom_town)
+    if town.company_name != company:
+        frappe.throw(
+            _("The selected Town does not belong to {0}. Select a Town for that Company first.").format(company)
+        )
+
+    town_name = cstr(town.town_name).strip().lower()
+    candidates = frappe.get_all(
+        "Warehouse",
+        filters={"company": company, "is_group": 0},
+        fields=["name", "warehouse_name"],
+    )
+    for candidate in candidates:
+        if cstr(candidate.warehouse_name).strip().lower() == town_name:
+            return candidate.name
+
+    frappe.throw(
+        _("No Warehouse named '{0}' exists under {1}. Create one before changing Company.").format(
+            town.town_name, company
+        )
+    )
+
+
+def sync_material_request_company(doc, method=None):
+    """Keep a mapped Material Request's Company - and its company-dependent
+    fields - in sync with this Purchase Order's Company. Runs on every PO
+    validate so it applies from the Dux Portal and the native ERPNext desk
+    alike, and updates the Material Request in place (no cancel/amend)."""
+    company = doc.get("company")
+    if not company:
+        return
+
+    mr_names = {row.material_request for row in doc.get("items") or [] if row.get("material_request")}
+    if not mr_names:
+        return
+
+    for mr_name in mr_names:
+        mr = frappe.get_doc("Material Request", mr_name)
+        if mr.company == company:
+            continue
+
+        new_warehouse = _resolve_town_warehouse(company, doc.get("custom_town"))
+        new_cost_center = frappe.get_cached_value("Company", company, "cost_center")
+        new_expense_account = frappe.get_cached_value("Company", company, "default_expense_account")
+        if not new_cost_center or not new_expense_account:
+            frappe.throw(_("{0} has no default Cost Center/Expense Account configured.").format(company))
+
+        mr.company = company
+        _set_if_field(mr, "custom_site_project", doc.get("custom_site_project"))
+        _set_if_field(mr, "custom_town", doc.get("custom_town"))
+        for row in mr.items:
+            if row.meta.has_field("warehouse"):
+                row.warehouse = new_warehouse
+            if row.meta.has_field("from_warehouse"):
+                row.from_warehouse = new_warehouse
+            if row.meta.has_field("cost_center"):
+                row.cost_center = new_cost_center
+            if row.meta.has_field("expense_account"):
+                row.expense_account = new_expense_account
+        mr.save(ignore_permissions=True)
+
+        _set_if_field(doc, "cost_center", new_cost_center)
+        _set_if_field(doc, "set_warehouse", new_warehouse)
+
+
 def on_purchase_receipt_submit(doc, method=None):
     _recalculate_linked_indent_statuses(_get_purchase_receipt_indent_names(doc))
 
