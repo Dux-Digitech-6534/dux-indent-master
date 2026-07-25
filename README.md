@@ -29,12 +29,15 @@ the whole point: the APK is a pointer, the UI lives on the server.
 - ZERO server changes — the whole login is client-side in the APK.
 
 ## The deliverable
-- Signed release APK: `dist/Dux-Procurement-Portal-v1.0.2.apk` (also in Downloads)
-- Package id: `com.dux.indentportal`  ·  Version: 1.0.2 (versionCode 3)
+- Signed release APK: `dist/Dux-Procurement-Portal-v1.0.5.apk` (also copied to Downloads)
+- Package id: `com.dux.indentportal`  ·  Version: 1.0.5 (versionCode 6)
 - Min Android 6.0 (SDK 23) · Targets Android 15 (SDK 35)
-- Android 15 forced edge-to-edge disabled via `targetSdkVersion 34` in
-  `android/variables.gradle` (compileSdk stays 35) so the system status/nav bars never
-  overlap the WebView, on every OEM. Verified on the Pixel_10_Pro emulator.
+- Android 15 forced edge-to-edge is opted out in the app theme, and
+  `MainActivity` explicitly fits the WebView inside visible status/navigation bars.
+  This keeps the live portal header and bottom content tappable on different OEMs.
+  Verified on an Android 15 Pixel emulator.
+- The Android back button first navigates one step back in the portal WebView.
+  It exits the activity only when the WebView has no previous page.
 
 ## Install (sideload)
 Copy the APK to the phone → tap it → allow "Install unknown apps" for the file
