@@ -2708,7 +2708,7 @@ def get_dux_indent_delivery_action_data(name):
 
 
 @frappe.whitelist()
-def create_delivery_challan_from_portal_indent(name, selected_items):
+def create_delivery_challan_from_portal_indent(name, selected_items, company=None):
     _require_authenticated_user()
     doc = frappe.get_doc("Dux Indent Master", name)
     doc.check_permission("read")
@@ -2717,6 +2717,11 @@ def create_delivery_challan_from_portal_indent(name, selected_items):
         for row in _document_operational_actions("dux_indent_master", doc)
     ):
         frappe.throw(_("Delivery Challan is not available for this indent."), frappe.PermissionError)
+    company = cstr(company).strip()
+    if not company:
+        frappe.throw(_("Select a Company for the Delivery Challan."))
+    if not frappe.db.exists("Company", company):
+        frappe.throw(_("Invalid Company."))
     allowed = {row.name for row in doc.get("items") or []}
     selected_items = frappe.parse_json(selected_items) if isinstance(selected_items, str) else selected_items
     if not isinstance(selected_items, list):
@@ -2737,7 +2742,7 @@ def create_delivery_challan_from_portal_indent(name, selected_items):
     if not cleaned:
         frappe.throw(_("Enter Delivery Challan quantity for at least one item."))
     method = frappe.get_attr("dux_indent_master.api.create_delivery_challan_from_indent")
-    return method(name, cleaned)
+    return method(name, cleaned, company=company)
 
 
 @frappe.whitelist()

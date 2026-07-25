@@ -1234,13 +1234,25 @@ class DuxProcurementPortal {
 			</tr>`).join("");
 			const dialog = new frappe.ui.Dialog({
 				title: __("Create Delivery Challan"),
-				fields: [{
-					fieldname: "items_html",
-					fieldtype: "HTML",
-					options: `<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr><th>${__("Item Name")}</th><th>${__("DC Qty")}</th></tr></thead><tbody>${rows}</tbody></table></div>`,
-				}],
+				fields: [
+					{
+						fieldname: "company",
+						fieldtype: "Link",
+						options: "Company",
+						label: __("Company"),
+						reqd: 1,
+						default: data.company || frappe.defaults.get_default("company") || undefined,
+					},
+					{
+						fieldname: "items_html",
+						fieldtype: "HTML",
+						options: `<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr><th>${__("Item Name")}</th><th>${__("DC Qty")}</th></tr></thead><tbody>${rows}</tbody></table></div>`,
+					},
+				],
 				primary_action_label: __("Create Delivery Challan"),
 				primary_action: async () => {
+					const company = dialog.get_value("company");
+					if (!company) return frappe.msgprint(__("Select a Company."));
 					const selected = [];
 					let invalid_quantity = false;
 					dialog.$wrapper.find("tr[data-row-name]").each((index, element) => {
@@ -1256,7 +1268,7 @@ class DuxProcurementPortal {
 					dialog.get_primary_btn().prop("disabled", true);
 					try {
 						const result = await this.call("dux_indent_master.portal.create_delivery_challan_from_portal_indent", {
-							name, selected_items: JSON.stringify(selected),
+							name, selected_items: JSON.stringify(selected), company,
 						});
 						const document_name = result.name || result.delivery_challan;
 						if (!document_name) throw new Error(__("Delivery Challan was not returned."));

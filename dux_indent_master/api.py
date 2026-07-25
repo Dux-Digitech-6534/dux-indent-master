@@ -3,7 +3,7 @@ from collections import defaultdict
 
 import frappe
 from frappe import _
-from frappe.utils import flt, now, nowdate, nowtime
+from frappe.utils import cstr, flt, now, nowdate, nowtime
 
 
 @frappe.whitelist()
@@ -268,7 +268,7 @@ def create_material_request_from_indent(indent_name, selected_items):
 
 
 @frappe.whitelist()
-def create_delivery_challan_from_indent(indent_name, selected_items=None):
+def create_delivery_challan_from_indent(indent_name, selected_items=None, company=None):
     if not indent_name or not frappe.db.exists("Dux Indent Master", indent_name):
         frappe.throw(_("Save Dux Indent Master before creating a Delivery Challan."))
 
@@ -342,7 +342,9 @@ def create_delivery_challan_from_indent(indent_name, selected_items=None):
     if not delivery_rows:
         frappe.throw(_("No delivery balance quantity is available for Delivery Challan."))
 
-    company = indent.company_name
+    company = cstr(company).strip() or indent.company_name
+    if not company:
+        frappe.throw(_("Select a Company for the Delivery Challan."))
     transit_warehouse = _get_delivery_challan_transit_warehouse(company)
     default_warehouse = delivery_rows[0][2]
 
