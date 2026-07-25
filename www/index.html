@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <title>Dux Procurement Portal</title>
+  <style>
+    :root{
+      --iris:#5C4DE6; --iris-deep:#4A3CD0; --cyan:#0E9C8B; --blue:#4F9FD8;
+      --grad:linear-gradient(135deg,#5C4DE6 0%,#4F9FD8 55%,#0E9C8B 100%);
+      --ink:#151a27; --ink-2:#5b6577; --ink-3:#8a93a3;
+      --card:#ffffff; --canvas:#eef0f6; --border:#e4e7ef; --field:#f4f6fb;
+      --danger:#c8475e; --danger-bg:#fdecef;
+      --radius:18px; --shadow:0 24px 60px rgba(28,32,64,.16);
+    }
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+    html,body{margin:0;height:100%}
+    body{
+      font-family:"Geist","Segoe UI",Inter,Roboto,-apple-system,Helvetica,Arial,sans-serif;
+      color:var(--ink);
+      background:
+        radial-gradient(1100px 520px at 15% -8%, rgba(92,77,230,.16), transparent 60%),
+        radial-gradient(900px 520px at 100% 8%, rgba(14,156,139,.14), transparent 55%),
+        var(--canvas);
+      min-height:100dvh;
+      display:flex;flex-direction:column;
+      padding:calc(env(safe-area-inset-top) + 20px) 20px calc(env(safe-area-inset-bottom) + 20px);
+    }
+    .wrap{margin:auto;width:100%;max-width:420px}
+
+    /* Brand header */
+    .brand{display:flex;flex-direction:column;align-items:center;gap:14px;margin-bottom:26px}
+    .badge{
+      width:78px;height:78px;border-radius:22px;background:var(--grad);
+      display:grid;place-items:center;box-shadow:0 16px 40px rgba(92,77,230,.42);
+    }
+    .badge img{width:52px;height:auto;display:block}
+    .brand h1{margin:0;font-size:21px;font-weight:750;letter-spacing:.01em}
+    .brand p{margin:0;font-size:13px;color:var(--ink-2);font-weight:500}
+
+    /* Card */
+    .card{
+      background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+      box-shadow:var(--shadow);padding:24px 22px;
+    }
+    .card h2{margin:0 0 4px;font-size:17px;font-weight:700}
+    .card .sub{margin:0 0 20px;font-size:13px;color:var(--ink-3)}
+
+    label{display:block;font-size:12.5px;font-weight:600;color:var(--ink-2);margin:0 0 7px}
+    .field{
+      display:flex;align-items:center;gap:10px;height:50px;padding:0 14px;margin-bottom:16px;
+      background:var(--field);border:1.5px solid transparent;border-radius:13px;
+      transition:border-color .18s ease, background .18s ease, box-shadow .18s ease;
+    }
+    .field:focus-within{border-color:var(--iris);background:#fff;box-shadow:0 0 0 4px rgba(92,77,230,.12)}
+    .field svg{flex:none;color:var(--ink-3)}
+    .field input{
+      flex:1;min-width:0;border:0;outline:0;background:transparent;
+      font-size:15px;color:var(--ink);font-family:inherit;
+    }
+    .field input::placeholder{color:var(--ink-3)}
+    .toggle{
+      flex:none;border:0;background:transparent;color:var(--ink-3);
+      font-size:12.5px;font-weight:600;cursor:pointer;padding:6px;
+    }
+
+    .msg{
+      display:none;align-items:flex-start;gap:8px;
+      background:var(--danger-bg);color:var(--danger);
+      border-radius:11px;padding:11px 13px;font-size:12.8px;font-weight:500;margin-bottom:16px;line-height:1.4;
+    }
+    .msg.show{display:flex}
+
+    .btn{
+      width:100%;height:52px;border:0;border-radius:14px;cursor:pointer;
+      background:var(--grad);color:#fff;font-size:15.5px;font-weight:700;font-family:inherit;letter-spacing:.01em;
+      display:flex;align-items:center;justify-content:center;gap:10px;
+      box-shadow:0 12px 30px rgba(92,77,230,.34);
+      transition:transform .06s ease, opacity .18s ease;
+    }
+    .btn:active{transform:translateY(1px)}
+    .btn[disabled]{opacity:.62;cursor:default}
+    .spinner{
+      width:19px;height:19px;border-radius:50%;
+      border:2.5px solid rgba(255,255,255,.4);border-top-color:#fff;
+      animation:spin .7s linear infinite;display:none;
+    }
+    .btn.loading .spinner{display:block}
+    .btn.loading .btn-label{display:none}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    .foot{margin-top:22px;text-align:center;font-size:11.5px;color:var(--ink-3);line-height:1.6}
+    .foot b{color:var(--ink-2);font-weight:650}
+
+    /* boot / session-check overlay */
+    .boot{
+      position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+      background:var(--canvas);z-index:20;
+    }
+    .boot .badge{width:70px;height:70px}
+    .boot .bspin{width:30px;height:30px;border-radius:50%;border:3px solid rgba(92,77,230,.18);border-top-color:var(--iris);animation:spin .7s linear infinite}
+    .hidden{display:none!important}
+
+    @media (max-width:360px){ .card{padding:20px 16px} .brand h1{font-size:19px} }
+  </style>
+</head>
+<body>
+  <!-- Session check splash (shown first; if already logged in we go straight to the portal) -->
+  <div class="boot" id="boot">
+    <div class="badge"><img src="dux-mark-white.png" alt="DUX" /></div>
+    <div class="bspin"></div>
+  </div>
+
+  <div class="wrap hidden" id="app">
+    <div class="brand">
+      <div class="badge"><img src="dux-mark-white.png" alt="DUX" /></div>
+      <h1>Dux Procurement Portal</h1>
+      <p>Jain Engineering Work</p>
+    </div>
+
+    <form class="card" id="loginForm" autocomplete="on" novalidate>
+      <h2>Welcome back</h2>
+      <p class="sub">Sign in to continue to your portal.</p>
+
+      <div class="msg" id="msg"></div>
+
+      <label for="usr">Email or Username</label>
+      <div class="field">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z" opacity="0"/><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+        <input id="usr" name="usr" type="text" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username" placeholder="you@company.com" />
+      </div>
+
+      <label for="pwd">Password</label>
+      <div class="field">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+        <input id="pwd" name="pwd" type="password" autocomplete="current-password" placeholder="••••••••" />
+        <button type="button" class="toggle" id="toggle">Show</button>
+      </div>
+
+      <button type="submit" class="btn" id="submit">
+        <span class="btn-label">Sign in</span>
+        <span class="spinner"></span>
+      </button>
+
+      <div class="foot">
+        <b>Jain Engineering Work</b> · Procurement<br />
+        Secure sign-in · powered by DUX Digitech
+      </div>
+    </form>
+  </div>
+
+  <script>
+    var SITE   = "https://jewipl.duxdigitech.in";
+    var PORTAL = SITE + "/app/dux-indent-portal";
+
+    var boot   = document.getElementById("boot");
+    var app    = document.getElementById("app");
+    var form   = document.getElementById("loginForm");
+    var usr    = document.getElementById("usr");
+    var pwd    = document.getElementById("pwd");
+    var submit = document.getElementById("submit");
+    var msgEl  = document.getElementById("msg");
+    var toggle = document.getElementById("toggle");
+
+    function showMsg(text){ msgEl.textContent = text; msgEl.classList.add("show"); }
+    function clearMsg(){ msgEl.classList.remove("show"); }
+    function goPortal(){ window.location.replace(PORTAL); }
+
+    toggle.addEventListener("click", function(){
+      var isPw = pwd.type === "password";
+      pwd.type = isPw ? "text" : "password";
+      toggle.textContent = isPw ? "Hide" : "Show";
+      pwd.focus();
+    });
+
+    // If a valid session cookie already exists, skip the login screen.
+    async function checkSession(){
+      try{
+        var r = await fetch(SITE + "/api/method/frappe.auth.get_logged_user", {
+          method:"GET", credentials:"include", headers:{ "Accept":"application/json" }
+        });
+        if(r.ok){
+          var d = await r.json();
+          if(d && d.message && d.message !== "Guest"){ goPortal(); return; }
+        }
+      }catch(e){ /* offline or blocked → just show the login form */ }
+      boot.classList.add("hidden");
+      app.classList.remove("hidden");
+      setTimeout(function(){ usr.focus(); }, 120);
+    }
+
+    async function doLogin(){
+      clearMsg();
+      var u = usr.value.trim(), p = pwd.value;
+      if(!u || !p){ showMsg("Please enter your email/username and password."); return; }
+      submit.disabled = true; submit.classList.add("loading");
+      try{
+        var body = "usr=" + encodeURIComponent(u) + "&pwd=" + encodeURIComponent(p);
+        var r = await fetch(SITE + "/api/method/login", {
+          method:"POST", credentials:"include",
+          headers:{ "Content-Type":"application/x-www-form-urlencoded", "Accept":"application/json" },
+          body: body
+        });
+        if(r.ok){ goPortal(); return; }        // cookie is set → enter portal
+        if(r.status === 401){ showMsg("Invalid credentials. Please check your email/username and password."); }
+        else { showMsg("Sign-in failed (" + r.status + "). Please try again."); }
+      }catch(e){
+        showMsg("Could not reach the server. Check your internet connection and try again.");
+      }finally{
+        submit.disabled = false; submit.classList.remove("loading");
+      }
+    }
+
+    form.addEventListener("submit", function(e){ e.preventDefault(); doLogin(); });
+
+    checkSession();
+  </script>
+</body>
+</html>
