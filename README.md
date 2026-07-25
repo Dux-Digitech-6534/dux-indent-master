@@ -32,8 +32,9 @@ the whole point: the APK is a pointer, the UI lives on the server.
 - Signed release APK: `dist/Dux-Procurement-Portal-v1.0.2.apk` (also in Downloads)
 - Package id: `com.dux.indentportal`  ·  Version: 1.0.2 (versionCode 3)
 - Min Android 6.0 (SDK 23) · Targets Android 15 (SDK 35)
-- Android 15 edge-to-edge disabled in `android/app/src/main/res/values/styles.xml`
-  (`windowOptOutEdgeToEdgeEnforcement`) so system bars don't overlap the WebView.
+- Android 15 forced edge-to-edge disabled via `targetSdkVersion 34` in
+  `android/variables.gradle` (compileSdk stays 35) so the system status/nav bars never
+  overlap the WebView, on every OEM. Verified on the Pixel_10_Pro emulator.
 
 ## Install (sideload)
 Copy the APK to the phone → tap it → allow "Install unknown apps" for the file
