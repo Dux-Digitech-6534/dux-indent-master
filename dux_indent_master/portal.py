@@ -479,7 +479,6 @@ DOCUMENT_CONFIG = {
                     _column("Item", "item_code"),
                     _column("Quantity", "qty"),
                     _column("UOM", "uom"),
-                    _column("Stock Qty", "stock_qty"),
                     _column("Specification", "specification"),
                 ],
             },
@@ -755,7 +754,7 @@ FORM_CONFIG = {
                 "fieldname": "items",
                 "fields": [
                     "item_code", "qty",
-                    "uom", "specification", "stock_qty",
+                    "uom", "specification",
                 ],
             },
         ],
