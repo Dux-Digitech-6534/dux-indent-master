@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from copy import deepcopy
 
 import frappe
@@ -120,7 +121,7 @@ DOCUMENT_CONFIG = {
                     _column("Item Name", "item_name"),
                     _column("Quantity", "qty"),
                     _column("UOM", "uom"),
-                    _column("Required Date", "schedule_date"),
+                    _column("Warehouse", "warehouse"),
                     _column("Specification", "custom_dux_indent_specification", "description"),
                 ],
             }
@@ -644,11 +645,10 @@ FORM_CONFIG = {
             {
                 "fieldname": "items",
                 "fields": [
-                    "item_code", "schedule_date", "qty", "uom",
+                    "item_code", "qty", "uom", "warehouse",
                     "custom_dux_indent_specification", "description",
                 ],
                 "field_overrides": {
-                    "schedule_date": {"label": "Required Date", "force_read_only": True},
                     "custom_dux_indent_specification": {"label": "Specification", "force_editable": True},
                 },
             },
@@ -672,7 +672,7 @@ FORM_CONFIG = {
         "tables": [
             {
                 "fieldname": "items",
-                "fields": ["item_code", "schedule_date", "qty", "uom", "conversion_factor", "rate", "amount", "description"],
+                "fields": ["item_code", "qty", "uom", "rate", "amount", "description"],
                 "field_overrides": {"amount": {"force_read_only": True}},
             },
             {"fieldname": "taxes", "position": "after_tables", "order": 2, "fields": ["category", "add_deduct_tax", "charge_type", "account_head", "description", "rate", "tax_amount"]},
@@ -2701,7 +2701,38 @@ def get_dux_indent_delivery_action_data(name):
             }
         )
 
-    return {"name": doc.name, "company": doc.get("company_name"), "items": items}
+    company = cstr(doc.get("company_name")).strip()
+    stock_companies = []
+    if not company and items:
+        selected_items = [
+            {"item_row": item["row_name"], "qty": item["balance_qty"]}
+            for item in items
+        ]
+        for company_name in frappe.get_list(
+            "Company", pluck="name", order_by="name asc"
+        ):
+            if get_indent_delivery_source_warehouse_options(
+                "Warehouse",
+                "",
+                "name",
+                0,
+                1,
+                {
+                    "company": company_name,
+                    "indent_name": doc.name,
+                    "selected_items": selected_items,
+                },
+            ):
+                stock_companies.append(company_name)
+        if len(stock_companies) == 1:
+            company = stock_companies[0]
+
+    return {
+        "name": doc.name,
+        "company": company,
+        "stock_companies": stock_companies,
+        "items": items,
+    }
 
 
 @frappe.whitelist()
@@ -2748,6 +2779,103 @@ def create_delivery_challan_from_portal_indent(name, selected_items, company=Non
 
 
 @frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def get_indent_delivery_source_warehouse_options(
+    doctype,
+    txt,
+    searchfield,
+    start,
+    page_len,
+    filters,
+):
+    """Return Company warehouses that can satisfy all currently selected indent quantities."""
+    _require_authenticated_user()
+    _require_doctype_permission("Warehouse", "read")
+    filters = frappe.parse_json(filters) if isinstance(filters, str) else (filters or {})
+    company = cstr(filters.get("company")).strip()
+    indent_name = cstr(filters.get("indent_name")).strip()
+    selected_items = filters.get("selected_items")
+    selected_items = (
+        frappe.parse_json(selected_items)
+        if isinstance(selected_items, str)
+        else selected_items
+    )
+    if not company or not indent_name or not isinstance(selected_items, list):
+        return []
+    if not frappe.db.exists("Company", company):
+        return []
+
+    indent = frappe.get_doc("Dux Indent Master", indent_name)
+    indent.check_permission("read")
+    indent_rows = {row.name: row for row in indent.get("items") or []}
+    required_by_item = defaultdict(float)
+    seen = set()
+    for selected in selected_items:
+        if not isinstance(selected, dict):
+            return []
+        row_name = cstr(selected.get("item_row")).strip()
+        qty = flt(selected.get("qty"))
+        row = indent_rows.get(row_name)
+        if not row or row_name in seen or qty <= 0:
+            return []
+        seen.add(row_name)
+        required_by_item[row.item_code] += qty
+    if not required_by_item:
+        return []
+
+    bin_rows = frappe.get_list(
+        "Bin",
+        filters={
+            "item_code": ["in", sorted(required_by_item)],
+            "actual_qty": [">", 0],
+        },
+        fields=["item_code", "warehouse", "actual_qty"],
+        limit_page_length=5000,
+    )
+    available_by_warehouse = defaultdict(lambda: defaultdict(float))
+    for row in bin_rows:
+        available_by_warehouse[row.warehouse][row.item_code] += flt(row.actual_qty)
+    if not available_by_warehouse:
+        return []
+
+    warehouse_rows = frappe.get_list(
+        "Warehouse",
+        filters={
+            "name": ["in", sorted(available_by_warehouse)],
+            "company": company,
+            "is_group": 0,
+        },
+        fields=["name", "warehouse_name", "warehouse_type"],
+        order_by="name asc",
+        limit_page_length=5000,
+    )
+    search_text = cstr(txt).strip().lower()
+    matches = []
+    for warehouse in warehouse_rows:
+        is_transit = (
+            cstr(warehouse.warehouse_type).strip().lower() == "transit"
+            or "transit" in cstr(warehouse.warehouse_name).strip().lower()
+        )
+        if is_transit:
+            continue
+        if any(
+            flt(available_by_warehouse[warehouse.name].get(item_code)) + 1e-9
+            < flt(required_qty)
+            for item_code, required_qty in required_by_item.items()
+        ):
+            continue
+        if search_text and search_text not in warehouse.name.lower() and search_text not in cstr(
+            warehouse.warehouse_name
+        ).lower():
+            continue
+        matches.append([warehouse.name, warehouse.warehouse_name])
+
+    start = max(cint(start), 0)
+    page_len = max(cint(page_len), 1)
+    return matches[start : start + page_len]
+
+
+@frappe.whitelist()
 def get_dux_indent_stock(name, row_names=None):
     _require_authenticated_user()
     doc = frappe.get_doc("Dux Indent Master", name)
@@ -2769,12 +2897,29 @@ def get_dux_indent_stock(name, row_names=None):
             actual_qty = flt(bin_row.get("actual_qty"))
             if actual_qty <= 0:
                 continue
+            warehouse_details = frappe.get_cached_value(
+                "Warehouse",
+                bin_row.get("warehouse"),
+                ["company", "warehouse_name", "warehouse_type", "is_group"],
+                as_dict=True,
+            )
+            if not warehouse_details or warehouse_details.is_group:
+                continue
+            is_transit = (
+                cstr(warehouse_details.warehouse_type).strip().lower() == "transit"
+                or "transit" in cstr(warehouse_details.warehouse_name).strip().lower()
+            )
+            if is_transit:
+                continue
             result.append(
                 {
                     "row_name": row.name,
                     "item_code": row.item_code,
                     "warehouse": bin_row.get("warehouse"),
                     "actual_qty": actual_qty,
+                    "company": warehouse_details.company,
+                    "is_transit": is_transit,
+                    "available_for_dispatch": not is_transit,
                 }
             )
     return result
@@ -3013,6 +3158,15 @@ def _prepare_portal_document(doc):
     for exchange_field in ("source_exchange_rate", "target_exchange_rate"):
         if doc.meta.has_field(exchange_field) and not flt(doc.get(exchange_field)):
             doc.set(exchange_field, 1)
+    for table_df in doc.meta.fields:
+        if table_df.fieldtype != "Table":
+            continue
+        child_meta = frappe.get_meta(table_df.options)
+        if not child_meta.has_field("conversion_factor"):
+            continue
+        for row in doc.get(table_df.fieldname) or []:
+            if not flt(row.get("conversion_factor")):
+                row.conversion_factor = 1
 
     # A document mapped from another company (e.g. a Material Request created
     # under one company) can carry cost centers/warehouses that no longer
