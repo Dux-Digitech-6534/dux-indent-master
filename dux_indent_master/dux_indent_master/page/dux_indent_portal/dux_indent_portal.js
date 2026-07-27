@@ -1250,7 +1250,22 @@ class DuxProcurementPortal {
 						options: "Warehouse",
 						label: __("Warehouse"),
 						reqd: 1,
-						get_query: () => ({ filters: { company: dialog.get_value("company") || undefined, is_group: 0 } }),
+						description: __("Only non-transit warehouses with enough stock for the current item quantities are shown."),
+						get_query: () => {
+							const selected_items = [];
+							dialog.$wrapper.find("tr[data-row-name]").each((index, element) => {
+								const qty = Number($(element).find(".duxp-indent-delivery-qty").val() || 0);
+								if (qty > 0) selected_items.push({ item_row: $(element).data("row-name"), qty });
+							});
+							return {
+								query: "dux_indent_master.portal.get_indent_delivery_source_warehouse_options",
+								filters: {
+									company: dialog.get_value("company") || "",
+									indent_name: name,
+									selected_items: JSON.stringify(selected_items),
+								},
+							};
+						},
 					},
 					{
 						fieldname: "items_html",
@@ -1304,9 +1319,11 @@ class DuxProcurementPortal {
 			const rows = await this.call("dux_indent_master.portal.get_dux_indent_stock", {
 				name, row_names: JSON.stringify(row_names),
 			});
-			const body = (rows || []).map((row) => `<tr><td>${this.escape(row.item_code)}</td><td>${this.escape(row.warehouse || "-")}</td><td>${this.escape(format_number(row.actual_qty))}</td></tr>`).join("")
-				|| `<tr><td colspan="3" class="text-center text-muted">${__("No positive stock is available for the selected rows.")}</td></tr>`;
-			frappe.msgprint({ title: __("Available Stock"), message: `<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr><th>${__("Item")}</th><th>${__("Warehouse")}</th><th>${__("Actual Qty")}</th></tr></thead><tbody>${body}</tbody></table></div>`, wide: true });
+			const body = (rows || []).map((row) =>
+				`<tr><td>${this.escape(row.item_code)}</td><td>${this.escape(row.company || "-")}</td><td>${this.escape(row.warehouse || "-")}</td><td>${this.escape(format_number(row.actual_qty))}</td></tr>`
+			).join("")
+				|| `<tr><td colspan="4" class="text-center text-muted">${__("No positive stock is available for the selected rows.")}</td></tr>`;
+			frappe.msgprint({ title: __("Stock by Warehouse"), message: `<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr><th>${__("Item")}</th><th>${__("Company")}</th><th>${__("Warehouse")}</th><th>${__("Available Qty")}</th></tr></thead><tbody>${body}</tbody></table></div>`, wide: true });
 		} catch (error) {
 			this.show_action_error(error, __("Stock Lookup Failed"));
 		}
@@ -2079,7 +2096,12 @@ class DuxProcurementPortal {
 			&& ["items", "taxes"].includes(table_fieldname)
 			&& ["item_code", "qty", "rate", "charge_type", "account_head"].includes(field.fieldname)
 		) {
-			await this.recalculate_purchase_order_totals();
+			// Debounced: typing a rate/qty fires a control change per keystroke, and each
+			// one used to await a full server round-trip. On a document with many rows
+			// this queued up faster than the network could drain it, eventually freezing
+			// the tab ("Page Unresponsive"). Only recompute once input settles.
+			clearTimeout(this.po_totals_debounce_timer);
+			this.po_totals_debounce_timer = setTimeout(() => this.recalculate_purchase_order_totals(), 400);
 		}
 		if (
 			this.form_data && this.form_data.key === "dux_indent_master"
