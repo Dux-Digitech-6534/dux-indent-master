@@ -1323,7 +1323,16 @@ class DuxProcurementPortal {
 				`<tr><td>${this.escape(row.item_code)}</td><td>${this.escape(row.warehouse || "-")}${row.is_transit ? ` <span class="text-muted">(${this.escape(__("In Transit"))})</span>` : ""}</td><td>${this.escape(format_number(row.actual_qty))}</td></tr>`
 			).join("")
 				|| `<tr><td colspan="3" class="text-center text-muted">${__("No positive stock is available for the selected rows.")}</td></tr>`;
-			frappe.msgprint({ title: __("Stock by Warehouse"), message: `<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr><th>${__("Item")}</th><th>${__("Warehouse")}</th><th>${__("Available Qty")}</th></tr></thead><tbody>${body}</tbody></table></div>`, wide: true });
+			const dialog = new frappe.ui.Dialog({
+				title: __("Stock by Warehouse"),
+				size: "large",
+				fields: [{
+					fieldname: "stock_html",
+					fieldtype: "HTML",
+					options: `<table class="table table-bordered" style="margin-bottom:0;"><thead><tr><th>${__("Item")}</th><th>${__("Warehouse")}</th><th>${__("Available Qty")}</th></tr></thead><tbody>${body}</tbody></table>`,
+				}],
+			});
+			dialog.show();
 		} catch (error) {
 			this.show_action_error(error, __("Stock Lookup Failed"));
 		}
