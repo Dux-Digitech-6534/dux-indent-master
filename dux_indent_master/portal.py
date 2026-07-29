@@ -672,7 +672,16 @@ FORM_CONFIG = {
         "tables": [
             {
                 "fieldname": "items",
-                "fields": ["item_code", "qty", "uom", "rate", "amount", "description"],
+                "fields": [
+                    "item_code",
+                    "qty",
+                    "uom",
+                    "rate",
+                    "amount",
+                    "gst_hsn_code",
+                    "item_tax_template",
+                    "description",
+                ],
                 "field_overrides": {"amount": {"force_read_only": True}},
             },
             {"fieldname": "taxes", "position": "after_tables", "order": 2, "fields": ["category", "add_deduct_tax", "charge_type", "account_head", "description", "rate", "tax_amount"]},
@@ -791,7 +800,12 @@ FORM_CONFIG = {
                 ],
             },
         ],
-        "tables": [],
+        "tables": [
+            {
+                "fieldname": "taxes",
+                "fields": ["item_tax_template"],
+            },
+        ],
     },
 }
 
@@ -2413,6 +2427,9 @@ def get_portal_item_defaults(
     warehouse=None,
     indent_name=None,
     indent_item_row_name=None,
+    transaction_date=None,
+    taxes_and_charges=None,
+    rate=None,
 ):
     """Provide safe item defaults used by new child rows in portal forms."""
     _require_authenticated_user()
@@ -2424,6 +2441,7 @@ def get_portal_item_defaults(
         get_indent_item_stock_qty_details,
         get_item_stock_qty,
     )
+    from erpnext.stock.get_item_details import get_item_tax_template
 
     selected_warehouse = warehouse or get_default_warehouse(item_code, company)
     if indent_name or indent_item_row_name:
@@ -2436,6 +2454,30 @@ def get_portal_item_defaults(
         stock_qty = flt((stock_details or {}).get("stock_qty"))
     else:
         stock_qty = get_item_stock_qty(item_code, selected_warehouse)
+
+    tax_category = None
+    if taxes_and_charges:
+        tax_category = frappe.db.get_value(
+            "Purchase Taxes and Charges Template",
+            taxes_and_charges,
+            "tax_category",
+        )
+    item_tax_template = None
+    if company:
+        tax_context = frappe._dict(
+            {
+                "item_code": item_code,
+                "company": company,
+                "transaction_date": transaction_date or nowdate(),
+                "tax_category": tax_category,
+                "base_net_rate": flt(rate) or flt(item.last_purchase_rate),
+            }
+        )
+        item_tax_template = get_item_tax_template(tax_context, item=item)
+        if not item_tax_template and tax_category:
+            tax_context.tax_category = None
+            item_tax_template = get_item_tax_template(tax_context, item=item)
+
     return {
         "item_name": item.item_name,
         "description": item.description,
@@ -2447,6 +2489,8 @@ def get_portal_item_defaults(
         "warehouse": selected_warehouse,
         "source_warehouse": selected_warehouse,
         "stock_qty": stock_qty,
+        "gst_hsn_code": item.get("gst_hsn_code"),
+        "item_tax_template": item_tax_template,
     }
 
 
@@ -2480,6 +2524,8 @@ def compute_purchase_order_totals(values):
                 "rate": flt(row.get("rate")),
                 "uom": row.get("uom"),
                 "conversion_factor": flt(row.get("conversion_factor")) or 1,
+                "gst_hsn_code": row.get("gst_hsn_code"),
+                "item_tax_template": row.get("item_tax_template"),
             },
         )
 
@@ -2498,6 +2544,16 @@ def compute_purchase_order_totals(values):
                 "add_deduct_tax": row.get("add_deduct_tax") or "Add",
             },
         )
+
+    from erpnext.stock.get_item_details import get_item_tax_map
+
+    for row in doc.get("items"):
+        if row.get("item_tax_template"):
+            row.item_tax_rate = get_item_tax_map(
+                doc=doc,
+                tax_template=row.item_tax_template,
+                as_json=True,
+            )
 
     if not doc.get("items"):
         return {"items": [], "taxes": [], "totals": {}}

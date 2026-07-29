@@ -12,6 +12,10 @@ required_apps = ["erpnext", "delivery_challan_custom"]
 
 after_migrate = "dux_indent_master.setup.after_migrate"
 
+override_doctype_class = {
+    "Material Request": "dux_indent_master.overrides.material_request.CompanyOptionalMaterialRequest"
+}
+
 doc_events = {
     "Material Request": {
         "on_submit": "dux_indent_master.api.on_material_request_submit",

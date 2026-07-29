@@ -319,6 +319,11 @@ def create_delivery_challan_from_indent(indent_name, selected_items=None, compan
     if not warehouse:
         frappe.throw(_("Select a Warehouse for the Delivery Challan."))
     transit_warehouse = _get_delivery_challan_transit_warehouse(company)
+    _validate_delivery_source_warehouse(
+        warehouse=warehouse,
+        company=company,
+        transit_warehouse=transit_warehouse,
+    )
 
     delivery_rows = []
     for row, balance_qty, requested in rows:
@@ -329,6 +334,7 @@ def create_delivery_challan_from_indent(indent_name, selected_items=None, compan
 
     if not delivery_rows:
         frappe.throw(_("No delivery balance quantity is available for Delivery Challan."))
+    _validate_delivery_source_stock(delivery_rows)
 
     delivery_challan = frappe.new_doc("Delivery Challan")
     delivery_challan.company = company
@@ -424,34 +430,159 @@ def on_purchase_order_cancel(doc, method=None):
     _recalculate_linked_indent_statuses(_get_purchase_order_indent_names(doc), ignore_links=True)
 
 
-def _resolve_town_warehouse(company, custom_town):
-    """Match a Town At Project's town name to a Warehouse under the given
-    Company. There is no formal foreign key for this - Warehouse.warehouse_name
-    is expected to match Town At Project.town_name by naming convention."""
-    if not custom_town:
-        frappe.throw(_("Select a Town before changing Company."))
+def _warehouse_belongs_to_company(warehouse, company):
+    if not warehouse:
+        return False
 
-    town = frappe.get_cached_doc("Town At Project", custom_town)
-    if town.company_name != company:
-        frappe.throw(
-            _("The selected Town does not belong to {0}. Select a Town for that Company first.").format(company)
-        )
-
-    town_name = cstr(town.town_name).strip().lower()
-    candidates = frappe.get_all(
+    warehouse_details = frappe.db.get_value(
         "Warehouse",
-        filters={"company": company, "is_group": 0},
-        fields=["name", "warehouse_name"],
+        warehouse,
+        ["company", "is_group"],
+        as_dict=True,
     )
-    for candidate in candidates:
-        if cstr(candidate.warehouse_name).strip().lower() == town_name:
-            return candidate.name
+    return bool(
+        warehouse_details
+        and warehouse_details.company == company
+        and not warehouse_details.is_group
+    )
+
+
+def _resolve_purchase_order_warehouse(doc, material_request, company):
+    """Resolve a non-group Warehouse belonging to the new PO Company.
+
+    Prefer the Warehouse explicitly selected on the Purchase Order. A Town is
+    only a fallback because Town names are not guaranteed to match Warehouse
+    names (for example, Town "Test" legitimately uses "Stores - DD").
+    """
+    candidates = []
+
+    def add_candidate(warehouse):
+        warehouse = cstr(warehouse).strip()
+        if warehouse and warehouse not in candidates:
+            candidates.append(warehouse)
+
+    add_candidate(doc.get("set_warehouse"))
+    for row in doc.get("items") or []:
+        add_candidate(row.get("warehouse"))
+
+    item_codes = {
+        row.get("item_code")
+        for row in [*(doc.get("items") or []), *(material_request.get("items") or [])]
+        if row.get("item_code")
+    }
+    for item_code in sorted(item_codes):
+        add_candidate(get_default_warehouse(item_code=item_code, company=company))
+
+    custom_town = doc.get("custom_town")
+    if custom_town:
+        town = frappe.db.get_value(
+            "Town At Project",
+            custom_town,
+            ["company_name", "town_name"],
+            as_dict=True,
+        )
+        if town and town.company_name == company and town.town_name:
+            add_candidate(
+                frappe.db.get_value(
+                    "Warehouse",
+                    {
+                        "company": company,
+                        "warehouse_name": town.town_name,
+                        "is_group": 0,
+                    },
+                    "name",
+                )
+            )
+
+    add_candidate(
+        frappe.db.get_value(
+            "Warehouse",
+            {"company": company, "warehouse_name": "Stores", "is_group": 0},
+            "name",
+        )
+    )
+
+    for warehouse in candidates:
+        if _warehouse_belongs_to_company(warehouse, company):
+            return warehouse
 
     frappe.throw(
-        _("No Warehouse named '{0}' exists under {1}. Create one before changing Company.").format(
-            town.town_name, company
-        )
+        _(
+            "Cannot change Material Request {0} to Company {1} because a valid "
+            "Warehouse for Company {1} was not found. Select a Target Warehouse "
+            "on Purchase Order {2}."
+        ).format(material_request.name, company, doc.name)
     )
+
+
+def _get_material_request_company_conflict(material_request, current_purchase_order=None):
+    """Return the first submitted Company-A transaction linked to the MR."""
+    references = (
+        ("Purchase Order Item", "Purchase Order"),
+        ("Purchase Receipt Item", "Purchase Receipt"),
+        ("Purchase Invoice Item", "Purchase Invoice"),
+        ("Stock Entry Detail", "Stock Entry"),
+    )
+
+    for child_doctype, parent_doctype in references:
+        parent_names = set(
+            frappe.get_all(
+                child_doctype,
+                filters={
+                    "material_request": material_request.name,
+                    "docstatus": 1,
+                },
+                pluck="parent",
+            )
+        )
+        if parent_doctype == "Purchase Order" and current_purchase_order:
+            parent_names.discard(current_purchase_order)
+        if not parent_names:
+            continue
+
+        conflicts = frappe.get_all(
+            parent_doctype,
+            filters={
+                "name": ["in", sorted(parent_names)],
+                "docstatus": 1,
+                "company": material_request.company,
+            },
+            pluck="name",
+            order_by="name asc",
+            limit_page_length=1,
+        )
+        if conflicts:
+            return parent_doctype, conflicts[0]
+
+    return None
+
+
+def _get_company_accounting_default(company, company_field, doctype, label, required):
+    value = frappe.get_cached_value("Company", company, company_field)
+    if not value:
+        if required:
+            frappe.throw(
+                _(
+                    "Cannot change Material Request to Company {0} because its "
+                    "default {1} is not configured."
+                ).format(company, label)
+            )
+        return None
+
+    details = frappe.db.get_value(
+        doctype,
+        value,
+        ["company", "is_group"],
+        as_dict=True,
+    )
+    if not details or details.company != company or details.is_group:
+        frappe.throw(
+            _(
+                "Cannot change Material Request to Company {0} because {1} {2} "
+                "is not a valid non-group value for that Company."
+            ).format(company, label, value)
+        )
+    return value
 
 
 def sync_material_request_company(doc, method=None):
@@ -463,7 +594,13 @@ def sync_material_request_company(doc, method=None):
     if not company:
         return
 
-    mr_names = {row.material_request for row in doc.get("items") or [] if row.get("material_request")}
+    mr_names = sorted(
+        {
+            cstr(row.get("material_request")).strip()
+            for row in doc.get("items") or []
+            if cstr(row.get("material_request")).strip()
+        }
+    )
     if not mr_names:
         return
 
@@ -472,28 +609,80 @@ def sync_material_request_company(doc, method=None):
         if mr.company == company:
             continue
 
-        new_warehouse = _resolve_town_warehouse(company, doc.get("custom_town"))
-        new_cost_center = frappe.get_cached_value("Company", company, "cost_center")
-        new_expense_account = frappe.get_cached_value("Company", company, "default_expense_account")
-        if not new_cost_center or not new_expense_account:
-            frappe.throw(_("{0} has no default Cost Center/Expense Account configured.").format(company))
+        conflict = _get_material_request_company_conflict(mr, doc.name)
+        if conflict:
+            conflict_doctype, conflict_name = conflict
+            frappe.throw(
+                _(
+                    "Cannot change Material Request {0} from Company {1} to Company {2} "
+                    "because submitted {3} {4} already exists under Company {1}."
+                ).format(mr.name, mr.company, company, conflict_doctype, conflict_name)
+            )
 
+        new_warehouse = _resolve_purchase_order_warehouse(doc, mr, company)
+        cost_center_rows = [
+            row for row in mr.items
+            if row.meta.has_field("cost_center")
+        ]
+        expense_account_rows = [
+            row for row in mr.items
+            if row.meta.has_field("expense_account")
+        ]
+        needs_cost_center = any(
+            row.get("cost_center") or row.meta.get_field("cost_center").reqd
+            for row in cost_center_rows
+        )
+        needs_expense_account = any(
+            row.get("expense_account") or row.meta.get_field("expense_account").reqd
+            for row in expense_account_rows
+        )
+        new_cost_center = _get_company_accounting_default(
+            company,
+            "cost_center",
+            "Cost Center",
+            _("Cost Center"),
+            needs_cost_center,
+        )
+        new_expense_account = _get_company_accounting_default(
+            company,
+            "default_expense_account",
+            "Account",
+            _("Expense Account"),
+            needs_expense_account,
+        )
+
+        old_company = mr.company
         mr.company = company
-        _set_if_field(mr, "custom_site_project", doc.get("custom_site_project"))
-        _set_if_field(mr, "custom_town", doc.get("custom_town"))
         for row in mr.items:
             if row.meta.has_field("warehouse"):
                 row.warehouse = new_warehouse
-            if row.meta.has_field("from_warehouse"):
+            if (
+                row.meta.has_field("from_warehouse")
+                and mr.material_request_type == "Material Transfer"
+            ):
                 row.from_warehouse = new_warehouse
             if row.meta.has_field("cost_center"):
                 row.cost_center = new_cost_center
             if row.meta.has_field("expense_account"):
                 row.expense_account = new_expense_account
         mr.save(ignore_permissions=True)
+        mr.add_comment(
+            "Info",
+            _(
+                "Company changed from {0} to {1} while creating Purchase Order "
+                "{2} by {3}."
+            ).format(old_company, company, doc.name, frappe.session.user),
+        )
 
         _set_if_field(doc, "cost_center", new_cost_center)
         _set_if_field(doc, "set_warehouse", new_warehouse)
+        for row in doc.get("items") or []:
+            if row.meta.has_field("warehouse"):
+                row.warehouse = new_warehouse
+            if row.meta.has_field("cost_center"):
+                row.cost_center = new_cost_center
+            if row.meta.has_field("expense_account"):
+                row.expense_account = new_expense_account
 
 
 def on_purchase_receipt_submit(doc, method=None):
@@ -1321,3 +1510,55 @@ def _get_delivery_challan_transit_warehouse(company):
         "delivery_challan.get_transit_warehouse"
     )
     return frappe.get_attr(method)(company)
+
+
+def _validate_delivery_source_warehouse(warehouse, company, transit_warehouse):
+    details = frappe.db.get_value(
+        "Warehouse",
+        warehouse,
+        ["company", "is_group", "warehouse_name", "warehouse_type"],
+        as_dict=True,
+    )
+    if not details:
+        frappe.throw(_("Warehouse {0} does not exist.").format(warehouse))
+    if details.is_group:
+        frappe.throw(_("Please select a non-group Source Warehouse: {0}.").format(warehouse))
+    if details.company != company:
+        frappe.throw(
+            _("Source Warehouse {0} does not belong to Company {1}.").format(
+                warehouse, company
+            )
+        )
+
+    is_transit = (
+        warehouse == transit_warehouse
+        or cstr(details.warehouse_type).strip().lower() == "transit"
+        or "transit" in cstr(details.warehouse_name).strip().lower()
+    )
+    if is_transit:
+        frappe.throw(
+            _(
+                "{0} is a Transit Warehouse and cannot be used as the Source "
+                "Warehouse for a new Delivery Challan. Stock in this warehouse "
+                "is already in transit; receive it against its existing Delivery "
+                "Challan or select a non-transit source warehouse."
+            ).format(warehouse)
+        )
+
+
+def _validate_delivery_source_stock(delivery_rows):
+    required_by_stock_key = defaultdict(float)
+    for row, qty, row_warehouse in delivery_rows:
+        required_by_stock_key[(row.item_code, row_warehouse)] += flt(qty)
+
+    for (item_code, warehouse), required_qty in sorted(required_by_stock_key.items()):
+        available_qty = flt(get_item_stock_qty(item_code, warehouse))
+        if available_qty + 1e-9 < flt(required_qty):
+            frappe.throw(
+                _(
+                    "Insufficient dispatchable stock for {0} in {1}. "
+                    "Required: {2}, Available: {3}. Stock in a Transit Warehouse "
+                    "belongs to an existing Delivery Challan and is not available "
+                    "for a new dispatch."
+                ).format(item_code, warehouse, required_qty, available_qty)
+            )

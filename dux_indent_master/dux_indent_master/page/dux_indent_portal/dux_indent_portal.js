@@ -2094,7 +2094,7 @@ class DuxProcurementPortal {
 		if (
 			this.form_data && this.form_data.key === "purchase_order"
 			&& ["items", "taxes"].includes(table_fieldname)
-			&& ["item_code", "qty", "rate", "charge_type", "account_head"].includes(field.fieldname)
+			&& ["item_code", "item_tax_template", "qty", "rate", "charge_type", "account_head"].includes(field.fieldname)
 		) {
 			// Debounced: typing a rate/qty fires a control change per keystroke, and each
 			// one used to await a full server round-trip. On a document with many rows
@@ -2147,13 +2147,20 @@ class DuxProcurementPortal {
 				item_code,
 				company: this.form_company_value(),
 				warehouse,
+				rate: controls.rate ? controls.rate.get_value() : undefined,
+				transaction_date: this.form_controls.transaction_date
+					? this.form_controls.transaction_date.get_value() : undefined,
+				taxes_and_charges: this.form_controls.taxes_and_charges
+					? this.form_controls.taxes_and_charges.get_value() : undefined,
 				...this.indent_item_context(table_fieldname, row_index),
 			});
-			["item_name", "description", "stock_uom", "uom", "conversion_factor", "rate", "basic_rate", "warehouse", "source_warehouse", "stock_qty"].forEach((fieldname) => {
+			["item_name", "description", "stock_uom", "uom", "conversion_factor", "rate", "basic_rate", "warehouse", "source_warehouse", "stock_qty", "gst_hsn_code", "item_tax_template"].forEach((fieldname) => {
 				const control = controls[fieldname];
 				if (!control || defaults[fieldname] === undefined) return;
 				if (is_indent_item && ["uom", "warehouse", "stock_qty"].includes(fieldname)) {
 					control.set_value(defaults[fieldname]);
+				} else if (["gst_hsn_code", "item_tax_template"].includes(fieldname)) {
+					control.set_value(defaults[fieldname] || "");
 				} else if (fieldname === "stock_qty" || !control.get_value()) {
 					control.set_value(defaults[fieldname]);
 				}
