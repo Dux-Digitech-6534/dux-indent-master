@@ -2965,8 +2965,6 @@ def get_dux_indent_stock(name, row_names=None):
                 cstr(warehouse_details.warehouse_type).strip().lower() == "transit"
                 or "transit" in cstr(warehouse_details.warehouse_name).strip().lower()
             )
-            if is_transit:
-                continue
             result.append(
                 {
                     "row_name": row.name,

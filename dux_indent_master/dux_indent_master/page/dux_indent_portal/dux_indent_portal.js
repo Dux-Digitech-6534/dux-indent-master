@@ -1320,10 +1320,10 @@ class DuxProcurementPortal {
 				name, row_names: JSON.stringify(row_names),
 			});
 			const body = (rows || []).map((row) =>
-				`<tr><td>${this.escape(row.item_code)}</td><td>${this.escape(row.company || "-")}</td><td>${this.escape(row.warehouse || "-")}</td><td>${this.escape(format_number(row.actual_qty))}</td></tr>`
+				`<tr><td>${this.escape(row.item_code)}</td><td>${this.escape(row.warehouse || "-")}${row.is_transit ? ` <span class="text-muted">(${this.escape(__("In Transit"))})</span>` : ""}</td><td>${this.escape(format_number(row.actual_qty))}</td></tr>`
 			).join("")
-				|| `<tr><td colspan="4" class="text-center text-muted">${__("No positive stock is available for the selected rows.")}</td></tr>`;
-			frappe.msgprint({ title: __("Stock by Warehouse"), message: `<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr><th>${__("Item")}</th><th>${__("Company")}</th><th>${__("Warehouse")}</th><th>${__("Available Qty")}</th></tr></thead><tbody>${body}</tbody></table></div>`, wide: true });
+				|| `<tr><td colspan="3" class="text-center text-muted">${__("No positive stock is available for the selected rows.")}</td></tr>`;
+			frappe.msgprint({ title: __("Stock by Warehouse"), message: `<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr><th>${__("Item")}</th><th>${__("Warehouse")}</th><th>${__("Available Qty")}</th></tr></thead><tbody>${body}</tbody></table></div>`, wide: true });
 		} catch (error) {
 			this.show_action_error(error, __("Stock Lookup Failed"));
 		}
