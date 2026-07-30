@@ -23,6 +23,7 @@ doc_events = {
     },
     "Purchase Order": {
         "before_validate": "dux_indent_master.api.sync_material_request_company",
+        "on_update": "dux_indent_master.api.on_purchase_order_workflow_state_change",
         "on_submit": "dux_indent_master.api.on_purchase_order_submit",
         "on_cancel": "dux_indent_master.api.on_purchase_order_cancel",
     },

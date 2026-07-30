@@ -668,6 +668,16 @@ FORM_CONFIG = {
             {"label": "Totals", "position": "after_tables", "order": 3, "fields": ["grand_total", "in_words", "rounding_adjustment", "rounded_total", "advance_paid"]},
             {"label": "Supplier Address, Billing & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "billing_address", "billing_address_display", "contact_person", "contact_display", "contact_mobile", "contact_email", "place_of_supply"]},
             {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display"]},
+            {"label": "Payment Terms", "tab": "terms_conditions", "tab_label": "Terms & Conditions", "fields": ["payment_terms_template"]},
+            {
+                "label": "Terms & Conditions",
+                "tab": "terms_conditions",
+                "tab_label": "Terms & Conditions",
+                "position": "after_tables",
+                "order": 1,
+                "fields": ["tc_name", "terms"],
+                "field_overrides": {"terms": {"keep_rich_text": True}},
+            },
         ],
         "tables": [
             {
@@ -677,14 +687,24 @@ FORM_CONFIG = {
                     "qty",
                     "uom",
                     "rate",
+                    "last_purchase_rate",
                     "amount",
                     "gst_hsn_code",
                     "item_tax_template",
                     "description",
                 ],
-                "field_overrides": {"amount": {"force_read_only": True}},
+                "field_overrides": {
+                    "last_purchase_rate": {"force_read_only": True},
+                    "amount": {"force_read_only": True},
+                },
             },
             {"fieldname": "taxes", "position": "after_tables", "order": 2, "fields": ["category", "add_deduct_tax", "charge_type", "account_head", "description", "rate", "tax_amount"]},
+            {
+                "fieldname": "payment_schedule",
+                "tab": "terms_conditions",
+                "label": "Payment Schedule",
+                "fields": ["payment_term", "due_date", "invoice_portion", "payment_amount"],
+            },
         ],
     },
     "purchase_receipt": {
@@ -1436,6 +1456,15 @@ def _document_operational_actions(route_key, doc):
             if frappe.has_permission("Delivery Challan", ptype="create"):
                 actions.append({"action": "indent_delivery_challan", "label": _("Delivery Challan"), "style": "primary"})
 
+    if route_key == "material_request":
+        if (
+            doc.docstatus == 1
+            and status != "Stopped"
+            and can_write
+            and frappe.has_permission("Delivery Challan", ptype="create")
+        ):
+            actions.append({"action": "mr_delivery_challan", "label": _("Delivery Challan"), "style": "primary"})
+
     return actions
 
 
@@ -1939,21 +1968,21 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
 
         rows = []
         for row in doc.get(table_config["fieldname"]) or []:
-            rows.append(
-                {
-                    "_row_name": row.name,
-                    **{field["fieldname"]: row.get(field["fieldname"]) for field in child_fields},
-                }
-            )
+            row_values = {
+                "_row_name": row.name,
+                **{field["fieldname"]: row.get(field["fieldname"]) for field in child_fields},
+            }
+            rows.append(row_values)
 
         tables.append(
             {
                 "fieldname": table_config["fieldname"],
-                "label": _(table_df.label or table_config["fieldname"]),
+                "label": _(table_config.get("label") or table_df.label or table_config["fieldname"]),
                 "doctype": table_df.options,
                 "reqd": bool(table_df.reqd),
                 "position": table_config.get("position") or "before_tables",
                 "order": table_config.get("order") or 0,
+                "tab": table_config.get("tab") or "details",
                 "fields": child_fields,
                 "rows": rows,
             }
@@ -2484,8 +2513,7 @@ def get_portal_item_defaults(
         "stock_uom": item.stock_uom,
         "uom": item.stock_uom,
         "conversion_factor": 1,
-        "rate": flt(item.last_purchase_rate),
-        "basic_rate": flt(item.last_purchase_rate),
+        "last_purchase_rate": flt(item.last_purchase_rate),
         "warehouse": selected_warehouse,
         "source_warehouse": selected_warehouse,
         "stock_qty": stock_qty,
@@ -2566,7 +2594,13 @@ def compute_purchase_order_totals(values):
         return {"items": [], "taxes": [], "totals": {}}
 
     return {
-        "items": [{"amount": flt(row.amount)} for row in doc.get("items")],
+        "items": [
+            {
+                "rate": flt(row.rate),
+                "amount": flt(row.amount),
+            }
+            for row in doc.get("items")
+        ],
         "taxes": [{"tax_amount": flt(row.tax_amount)} for row in doc.get("taxes")],
         "totals": {
             "grand_total": flt(doc.grand_total),
@@ -2914,11 +2948,179 @@ def get_indent_delivery_source_warehouse_options(
         )
         if is_transit:
             continue
-        if any(
-            flt(available_by_warehouse[warehouse.name].get(item_code)) + 1e-9
-            < flt(required_qty)
-            for item_code, required_qty in required_by_item.items()
-        ):
+        if search_text and search_text not in warehouse.name.lower() and search_text not in cstr(
+            warehouse.warehouse_name
+        ).lower():
+            continue
+        matches.append([warehouse.name, warehouse.warehouse_name])
+
+    start = max(cint(start), 0)
+    page_len = max(cint(page_len), 1)
+    return matches[start : start + page_len]
+
+
+@frappe.whitelist()
+def get_material_request_delivery_action_data(name):
+    _require_authenticated_user()
+    doc = frappe.get_doc("Material Request", name)
+    doc.check_permission("read")
+    if not any(
+        row["action"] == "mr_delivery_challan"
+        for row in _document_operational_actions("material_request", doc)
+    ):
+        frappe.throw(_("Delivery Challan is not available for this Material Request."), frappe.PermissionError)
+
+    from dux_indent_master.api import (
+        _get_material_request_delivery_qty_map,
+        _get_mr_delivery_creation_balance_qty,
+    )
+
+    submitted_qty = _get_material_request_delivery_qty_map(doc.name, docstatus=1)
+    draft_qty = _get_material_request_delivery_qty_map(doc.name, docstatus=0)
+    items = []
+    for row in doc.get("items") or []:
+        balance_qty = _get_mr_delivery_creation_balance_qty(row, submitted_qty, draft_qty)
+        if not row.item_code or balance_qty <= 0:
+            continue
+        items.append(
+            {
+                "row_name": row.name,
+                "item_name": frappe.get_cached_value("Item", row.item_code, "item_name")
+                or row.item_code,
+                "balance_qty": flt(balance_qty),
+                "max_qty": flt(balance_qty),
+            }
+        )
+
+    return {
+        "name": doc.name,
+        "company": cstr(doc.get("company")).strip(),
+        "items": items,
+    }
+
+
+@frappe.whitelist()
+def create_delivery_challan_from_portal_material_request(name, selected_items, company=None, warehouse=None):
+    _require_authenticated_user()
+    doc = frappe.get_doc("Material Request", name)
+    doc.check_permission("read")
+    if not any(
+        row["action"] == "mr_delivery_challan"
+        for row in _document_operational_actions("material_request", doc)
+    ):
+        frappe.throw(_("Delivery Challan is not available for this Material Request."), frappe.PermissionError)
+    company = cstr(company).strip()
+    if not company:
+        frappe.throw(_("Select a Company for the Delivery Challan."))
+    if not frappe.db.exists("Company", company):
+        frappe.throw(_("Invalid Company."))
+    warehouse = cstr(warehouse).strip()
+    if not warehouse:
+        frappe.throw(_("Select a Warehouse for the Delivery Challan."))
+    if not frappe.db.exists("Warehouse", warehouse):
+        frappe.throw(_("Invalid Warehouse."))
+    allowed = {row.name for row in doc.get("items") or []}
+    selected_items = frappe.parse_json(selected_items) if isinstance(selected_items, str) else selected_items
+    if not isinstance(selected_items, list):
+        frappe.throw(_("Invalid Delivery Challan item selection."))
+    cleaned = []
+    seen = set()
+    for row in selected_items or []:
+        if not isinstance(row, dict):
+            frappe.throw(_("Invalid Delivery Challan item selection."))
+        row_name = row.get("item_row")
+        qty = flt(row.get("qty"))
+        if row_name not in allowed or row_name in seen:
+            frappe.throw(_("Select a valid Material Request item once for Delivery Challan."))
+        if qty <= 0:
+            frappe.throw(_("Delivery Challan quantity must be greater than zero."))
+        seen.add(row_name)
+        cleaned.append({"item_row": row_name, "qty": qty})
+    if not cleaned:
+        frappe.throw(_("Enter Delivery Challan quantity for at least one item."))
+    method = frappe.get_attr("dux_indent_master.api.create_delivery_challan_from_material_request")
+    return method(name, cleaned, company=company, warehouse=warehouse)
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def get_material_request_delivery_source_warehouse_options(
+    doctype,
+    txt,
+    searchfield,
+    start,
+    page_len,
+    filters,
+):
+    """Return Company warehouses that can satisfy all currently selected Material Request quantities."""
+    _require_authenticated_user()
+    _require_doctype_permission("Warehouse", "read")
+    filters = frappe.parse_json(filters) if isinstance(filters, str) else (filters or {})
+    company = cstr(filters.get("company")).strip()
+    mr_name = cstr(filters.get("material_request_name")).strip()
+    selected_items = filters.get("selected_items")
+    selected_items = (
+        frappe.parse_json(selected_items)
+        if isinstance(selected_items, str)
+        else selected_items
+    )
+    if not company or not mr_name or not isinstance(selected_items, list):
+        return []
+    if not frappe.db.exists("Company", company):
+        return []
+
+    doc = frappe.get_doc("Material Request", mr_name)
+    doc.check_permission("read")
+    mr_rows = {row.name: row for row in doc.get("items") or []}
+    required_by_item = defaultdict(float)
+    seen = set()
+    for selected in selected_items:
+        if not isinstance(selected, dict):
+            return []
+        row_name = cstr(selected.get("item_row")).strip()
+        qty = flt(selected.get("qty"))
+        row = mr_rows.get(row_name)
+        if not row or row_name in seen or qty <= 0:
+            return []
+        seen.add(row_name)
+        required_by_item[row.item_code] += qty
+    if not required_by_item:
+        return []
+
+    bin_rows = frappe.get_list(
+        "Bin",
+        filters={
+            "item_code": ["in", sorted(required_by_item)],
+            "actual_qty": [">", 0],
+        },
+        fields=["item_code", "warehouse", "actual_qty"],
+        limit_page_length=5000,
+    )
+    available_by_warehouse = defaultdict(lambda: defaultdict(float))
+    for row in bin_rows:
+        available_by_warehouse[row.warehouse][row.item_code] += flt(row.actual_qty)
+    if not available_by_warehouse:
+        return []
+
+    warehouse_rows = frappe.get_list(
+        "Warehouse",
+        filters={
+            "name": ["in", sorted(available_by_warehouse)],
+            "company": company,
+            "is_group": 0,
+        },
+        fields=["name", "warehouse_name", "warehouse_type"],
+        order_by="name asc",
+        limit_page_length=5000,
+    )
+    search_text = cstr(txt).strip().lower()
+    matches = []
+    for warehouse in warehouse_rows:
+        is_transit = (
+            cstr(warehouse.warehouse_type).strip().lower() == "transit"
+            or "transit" in cstr(warehouse.warehouse_name).strip().lower()
+        )
+        if is_transit:
             continue
         if search_text and search_text not in warehouse.name.lower() and search_text not in cstr(
             warehouse.warehouse_name
@@ -3057,6 +3259,8 @@ def _serialize_form_field(
         "Text Editor": "Small Text",
         "Code": "Small Text",
     }.get(df.fieldtype, df.fieldtype)
+    if field_override.get("keep_rich_text") and df.fieldtype in ("Text Editor", "Code"):
+        fieldtype = df.fieldtype
 
     value = doc.get(fieldname) if doc else None
     force_editable = bool(field_override.get("force_editable"))
@@ -3076,7 +3280,11 @@ def _serialize_form_field(
         "reqd": bool(field_override["reqd"] if "reqd" in field_override else df.reqd),
         "read_only": not editable,
         "allow_on_submit": bool(df.allow_on_submit),
-        "depends_on": df.depends_on,
+        "depends_on": (
+            field_override["depends_on"]
+            if "depends_on" in field_override
+            else df.depends_on
+        ),
         "mandatory_depends_on": df.mandatory_depends_on,
         "read_only_depends_on": df.read_only_depends_on,
         "default": df.default,
@@ -3278,10 +3486,8 @@ def _prepare_portal_document(doc):
             ):
                 if row.meta.has_field(fieldname) and not row.get(fieldname):
                     row.set(fieldname, value)
-            if row.meta.has_field("rate") and not row.get("rate"):
-                row.rate = flt(item.last_purchase_rate)
-            if row.meta.has_field("basic_rate") and not row.get("basic_rate"):
-                row.basic_rate = flt(item.last_purchase_rate)
+            if row.meta.has_field("last_purchase_rate"):
+                row.last_purchase_rate = flt(item.last_purchase_rate)
             if row.meta.has_field("schedule_date") and not row.get("schedule_date"):
                 row.schedule_date = doc.get("schedule_date") or doc.get("transaction_date") or nowdate()
             if row.meta.has_field("required_date") and not row.get("required_date"):

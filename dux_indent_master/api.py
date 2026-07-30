@@ -1,9 +1,10 @@
 import json
+import secrets
 from collections import defaultdict
 
 import frappe
 from frappe import _
-from frappe.utils import cstr, flt, now, nowdate, nowtime
+from frappe.utils import cstr, flt, fmt_money, formatdate, now, nowdate, nowtime
 
 
 @frappe.whitelist()
@@ -379,6 +380,162 @@ def create_delivery_challan_from_indent(indent_name, selected_items=None, compan
     )
     indent.update_purchase_status()
     _save_indent(indent)
+
+    return {"doctype": delivery_challan.doctype, "name": delivery_challan.name}
+
+
+def _get_material_request_delivery_qty_map(mr_name, docstatus, exclude_delivery_challan=None):
+    if not (
+        frappe.db.exists("DocType", "Delivery Challan")
+        and frappe.db.has_column("Delivery Challan", "custom_material_request")
+        and frappe.db.has_column("Delivery Challan Item", "custom_material_request_item")
+    ):
+        return {}
+
+    conditions = ["dc.custom_material_request = %s", "dc.docstatus = %s"]
+    values = [mr_name, docstatus]
+    if exclude_delivery_challan:
+        conditions.append("dc.name != %s")
+        values.append(exclude_delivery_challan)
+
+    qty_expression = _get_delivery_challan_qty_expression("item")
+    rows = frappe.db.sql(
+        f"""
+        select
+            item.custom_material_request_item as mr_item,
+            sum({qty_expression}) as qty
+        from `tabDelivery Challan Item` item
+        inner join `tabDelivery Challan` dc on dc.name = item.parent
+        where {" and ".join(conditions)}
+          and coalesce(item.custom_material_request_item, '') != ''
+        group by item.custom_material_request_item
+        """,
+        values,
+        as_dict=True,
+    )
+    return {row.mr_item: flt(row.qty) for row in rows}
+
+
+def _get_mr_delivery_creation_balance_qty(row, submitted_qty, draft_qty):
+    delivered = flt(submitted_qty.get(row.name)) + flt(draft_qty.get(row.name))
+    return max(flt(row.qty) - delivered, 0)
+
+
+@frappe.whitelist()
+def create_delivery_challan_from_material_request(mr_name, selected_items=None, company=None, warehouse=None):
+    if not mr_name or not frappe.db.exists("Material Request", mr_name):
+        frappe.throw(_("Save Material Request before creating a Delivery Challan."))
+
+    if not frappe.db.exists("DocType", "Delivery Challan"):
+        frappe.throw(_("Delivery Challan DocType is not available on this site."))
+
+    mr = frappe.get_doc("Material Request", mr_name)
+    if mr.docstatus == 2:
+        frappe.throw(_("Cannot create Delivery Challan from a cancelled Material Request."))
+    if mr.docstatus != 1:
+        frappe.throw(_("Submit Material Request before creating a Delivery Challan."))
+    if cstr(mr.get("status")) == "Stopped":
+        frappe.throw(_("This Material Request is Stopped."))
+
+    submitted_qty = _get_material_request_delivery_qty_map(mr.name, docstatus=1)
+    draft_qty = _get_material_request_delivery_qty_map(mr.name, docstatus=0)
+
+    requested_qty = _parse_selected_items(selected_items) if selected_items is not None else None
+    mr_rows = {row.name: row for row in mr.get("items") or []}
+    if requested_qty is not None:
+        invalid_rows = [row_name for row_name in requested_qty if row_name not in mr_rows]
+        if invalid_rows:
+            frappe.throw(_("One or more selected rows do not belong to this Material Request."))
+        if not requested_qty:
+            frappe.throw(_("Enter Delivery Challan quantity for at least one item."))
+
+    rows = []
+    for row in mr.get("items") or []:
+        if not row.item_code:
+            continue
+        balance_qty = _get_mr_delivery_creation_balance_qty(row, submitted_qty, draft_qty)
+        if requested_qty is None:
+            if balance_qty > 0:
+                rows.append((row, balance_qty, None))
+            continue
+        if row.name not in requested_qty:
+            continue
+        qty = flt(requested_qty[row.name])
+        if qty <= 0:
+            frappe.throw(_("Delivery Challan Qty must be greater than zero for {0}.").format(row.item_code))
+        if qty > flt(balance_qty):
+            frappe.throw(
+                _("Delivery Challan Qty {0} cannot exceed Material Request balance Qty {1} for {2}.").format(
+                    qty, balance_qty, row.item_code
+                )
+            )
+        rows.append((row, balance_qty, qty))
+
+    if not rows:
+        frappe.throw(_("No delivery balance quantity is available for Delivery Challan."))
+
+    company = cstr(company).strip()
+    if not company:
+        frappe.throw(_("Select a Company for the Delivery Challan."))
+    if not frappe.db.exists("Company", company):
+        frappe.throw(_("Invalid Company."))
+    warehouse = cstr(warehouse).strip()
+    if not warehouse:
+        frappe.throw(_("Select a Warehouse for the Delivery Challan."))
+    transit_warehouse = _get_delivery_challan_transit_warehouse(company)
+    _validate_delivery_source_warehouse(
+        warehouse=warehouse,
+        company=company,
+        transit_warehouse=transit_warehouse,
+    )
+
+    delivery_rows = []
+    for row, balance_qty, requested in rows:
+        qty = flt(requested) if requested is not None else flt(balance_qty)
+        if qty <= 0:
+            continue
+        delivery_rows.append((row, qty, warehouse))
+
+    if not delivery_rows:
+        frappe.throw(_("No delivery balance quantity is available for Delivery Challan."))
+    _validate_delivery_source_stock(delivery_rows)
+
+    delivery_challan = frappe.new_doc("Delivery Challan")
+    delivery_challan.company = company
+    delivery_challan.posting_date = nowdate()
+    delivery_challan.posting_time = nowtime()
+    delivery_challan.source_warehouse = warehouse
+    delivery_challan.target_warehouse = warehouse
+    delivery_challan.transit_warehouse = transit_warehouse
+    remark_text = _("Created from Material Request {0}").format(mr.name)
+    for fieldname in ("remark", "remarks", "custom_remark"):
+        if delivery_challan.meta.has_field(fieldname):
+            delivery_challan.set(fieldname, remark_text)
+            break
+    _set_if_field(delivery_challan, "custom_material_request", mr.name)
+
+    total_qty = 0
+    for row, qty, row_warehouse in delivery_rows:
+        if qty <= 0:
+            frappe.throw(_("Delivery Challan Qty must be greater than zero for {0}.").format(row.item_code))
+
+        item = delivery_challan.append(
+            "items",
+            {
+                "item_code": row.item_code,
+                "qty": qty,
+                "uom": row.uom,
+                "source_warehouse": row_warehouse,
+                "target_warehouse": row_warehouse,
+                "transit_warehouse": transit_warehouse,
+                "remarks": row.get("custom_dux_indent_specification"),
+            },
+        )
+        _set_if_field(item, "custom_delivery_challan_qty", qty)
+        _set_if_field(item, "custom_material_request_item", row.name)
+        total_qty += qty
+
+    delivery_challan.insert()
 
     return {"doctype": delivery_challan.doctype, "name": delivery_challan.name}
 
@@ -1562,3 +1719,212 @@ def _validate_delivery_source_stock(delivery_rows):
                     "for a new dispatch."
                 ).format(item_code, warehouse, required_qty, available_qty)
             )
+
+
+PO_APPROVAL_TOKEN_TTL = 14 * 24 * 60 * 60  # 14 days
+PO_APPROVAL_EMAIL_TEMPLATE = "Po approval email"
+PO_APPROVAL_ROLE = "PO Approver"
+
+
+def _get_po_department(doc):
+    for row in doc.get("items") or []:
+        material_request = row.get("material_request")
+        if not material_request:
+            continue
+        department = frappe.db.get_value(
+            "Material Request", material_request, "custom_dux_indent_department"
+        )
+        if department:
+            return department
+    return "-"
+
+
+def _get_po_item_summary(doc):
+    names = [row.item_name or row.item_code for row in (doc.get("items") or []) if row.item_code]
+    if not names:
+        return "-"
+    if len(names) <= 2:
+        return ", ".join(names)
+    return f"{names[0]}, {names[1]} +{len(names) - 2} more"
+
+
+def _create_po_approval_action_token(po_name, user, action):
+    token = secrets.token_urlsafe(32)
+    frappe.cache().set_value(
+        f"po_approval_token:{token}",
+        frappe.as_json({"po_name": po_name, "user": user, "action": action}),
+        expires_in_sec=PO_APPROVAL_TOKEN_TTL,
+    )
+    return token
+
+
+def send_po_approval_emails(doc):
+    """Email every PO Approver a personalised one-click Approve/Reject link."""
+    if not frappe.db.exists("Email Template", PO_APPROVAL_EMAIL_TEMPLATE):
+        frappe.log_error(
+            title="PO approval email skipped",
+            message=f"Email Template '{PO_APPROVAL_EMAIL_TEMPLATE}' not found.",
+        )
+        return
+
+    approvers = frappe.get_all(
+        "Has Role",
+        filters={"role": PO_APPROVAL_ROLE, "parenttype": "User"},
+        pluck="parent",
+    )
+    if not approvers:
+        return
+
+    active_users = set(
+        frappe.get_all(
+            "User",
+            filters={"name": ["in", approvers], "enabled": 1},
+            pluck="name",
+        )
+    )
+    if not active_users:
+        return
+
+    template = frappe.get_doc("Email Template", PO_APPROVAL_EMAIL_TEMPLATE)
+    base_url = frappe.utils.get_url()
+    view_url = f"{base_url}/app/purchase-order/{doc.name}"
+
+    company_name = doc.company
+    po_date = formatdate(doc.transaction_date, "dd-MM-yyyy") if doc.transaction_date else "-"
+    vendor_name = doc.supplier_name or doc.supplier
+    department = _get_po_department(doc)
+    requested_by = frappe.db.get_value("User", doc.owner, "full_name") or doc.owner
+    item_description = _get_po_item_summary(doc)
+    quantity = fmt_money(doc.total_qty or 0, precision=2)
+    delivery_date = formatdate(doc.schedule_date, "dd-MM-yyyy") if doc.schedule_date else "-"
+    total_amount = fmt_money(doc.grand_total or 0, currency=doc.currency, precision=2)
+
+    for user in active_users:
+        try:
+            approver_name = frappe.db.get_value("User", user, "full_name") or user
+            approve_token = _create_po_approval_action_token(doc.name, user, "Approve")
+            reject_token = _create_po_approval_action_token(doc.name, user, "Reject")
+            context = {
+                "COMPANY_NAME": company_name,
+                "APPROVER_NAME": approver_name,
+                "PO_NUMBER": doc.name,
+                "PO_DATE": po_date,
+                "VENDOR_NAME": vendor_name,
+                "DEPARTMENT": department,
+                "REQUESTED_BY": requested_by,
+                "ITEM_DESCRIPTION": item_description,
+                "QUANTITY": quantity,
+                "DELIVERY_DATE": delivery_date,
+                "TOTAL_AMOUNT": total_amount,
+                "APPROVE_URL": (
+                    f"{base_url}/api/method/dux_indent_master.api.handle_po_approval_action"
+                    f"?token={approve_token}"
+                ),
+                "REJECT_URL": (
+                    f"{base_url}/api/method/dux_indent_master.api.handle_po_approval_action"
+                    f"?token={reject_token}"
+                ),
+                "VIEW_PO_URL": view_url,
+            }
+            message = frappe.render_template(template.response_html or template.response, context)
+            subject = frappe.render_template(
+                template.subject or "Purchase Order Approval Required: {{PO_NUMBER}}", context
+            )
+            frappe.sendmail(
+                recipients=[user],
+                subject=subject,
+                message=message,
+                reference_doctype=doc.doctype,
+                reference_name=doc.name,
+                now=True,
+            )
+        except Exception:
+            frappe.log_error(
+                title="PO approval email failed",
+                message=f"Could not email PO Approver {user} for {doc.name}.\n{frappe.get_traceback()}",
+            )
+
+
+def on_purchase_order_workflow_state_change(doc, method=None):
+    """Send PO Approver notification emails the moment a PO enters Pending Approval.
+
+    Wrapped defensively: a notification failure must never block the actual
+    workflow transition/save the user is performing.
+    """
+    try:
+        if doc.get("workflow_state") != "Pending Approval":
+            return
+        previous = doc.get_doc_before_save()
+        previous_state = previous.get("workflow_state") if previous else None
+        if previous_state == "Pending Approval":
+            return
+        send_po_approval_emails(doc)
+    except Exception:
+        frappe.log_error(
+            title="PO approval email trigger failed",
+            message=f"Could not send approval emails for {doc.name}.\n{frappe.get_traceback()}",
+        )
+
+
+@frappe.whitelist(allow_guest=True)
+def handle_po_approval_action(token):
+    """Land here when a PO Approver clicks Approve/Reject from the email."""
+    cache_key = f"po_approval_token:{token}"
+    raw = frappe.cache().get_value(cache_key)
+    data = frappe.parse_json(raw) if raw else None
+
+    def _page(title, message, is_error=False):
+        color = "#dc2626" if is_error else "#16a34a"
+        html = (
+            "<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:480px;"
+            "margin:80px auto;text-align:center;padding:32px;border:1px solid #e2e8f0;"
+            f"border-radius:8px;\"><h2 style=\"color:{color};margin-bottom:12px;\">{title}"
+            f"</h2><p style=\"color:#374151;font-size:14px;\">{message}</p></div>"
+        )
+        frappe.respond_as_web_page(title, html, indicator_color=color, success=not is_error)
+
+    if not data:
+        _page(
+            "Link Expired",
+            "This approval link has expired or was already used. Please open the "
+            "Purchase Order directly to take action.",
+            is_error=True,
+        )
+        return
+
+    po_name, user, action = data.get("po_name"), data.get("user"), data.get("action")
+    if not frappe.db.exists("Purchase Order", po_name):
+        _page("Not Found", "This Purchase Order no longer exists.", is_error=True)
+        return
+
+    if PO_APPROVAL_ROLE not in frappe.get_roles(user):
+        _page(
+            "Not Authorized",
+            "This action is no longer available for this account.",
+            is_error=True,
+        )
+        return
+
+    doc = frappe.get_doc("Purchase Order", po_name)
+    if doc.get("workflow_state") != "Pending Approval":
+        frappe.cache().delete_value(cache_key)
+        _page(
+            "Already Actioned",
+            f"Purchase Order {po_name} has already been "
+            f"{doc.get('workflow_state') or 'processed'}. No further action is needed.",
+        )
+        return
+
+    frappe.set_user(user)
+    from frappe.model.workflow import apply_workflow
+
+    try:
+        apply_workflow(doc, action)
+    except Exception as e:
+        frappe.db.rollback()
+        _page("Action Failed", cstr(e), is_error=True)
+        return
+
+    frappe.cache().delete_value(cache_key)
+    verb = "approved" if action == "Approve" else "rejected"
+    _page(f"Purchase Order {verb.title()}", f"Purchase Order {po_name} has been {verb} successfully.")

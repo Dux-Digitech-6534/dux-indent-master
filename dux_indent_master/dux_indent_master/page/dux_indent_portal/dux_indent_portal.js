@@ -697,7 +697,7 @@ class DuxProcurementPortal {
 			</section>
 		`; }).join("");
 
-		const DROPDOWN_OPERATIONAL_ACTIONS = ["indent_material_purchase", "indent_delivery_challan"];
+		const DROPDOWN_OPERATIONAL_ACTIONS = ["indent_material_purchase", "indent_delivery_challan", "mr_delivery_challan"];
 		const dropdown_operational_actions = (data.operational_actions || [])
 			.filter((action) => DROPDOWN_OPERATIONAL_ACTIONS.includes(action.action));
 		const create_menu_items = [
@@ -1125,6 +1125,7 @@ class DuxProcurementPortal {
 		if (action === "indent_material_purchase") return this.open_indent_material_purchase(name);
 		if (action === "indent_delivery_challan") return this.create_indent_delivery_challan(name);
 		if (action === "indent_view_stock") return this.view_indent_stock(name);
+		if (action === "mr_delivery_challan") return this.create_mr_delivery_challan(name);
 	}
 
 	add_delivery_challan_material(name) {
@@ -1250,7 +1251,7 @@ class DuxProcurementPortal {
 						options: "Warehouse",
 						label: __("Warehouse"),
 						reqd: 1,
-						description: __("Only non-transit warehouses with enough stock for the current item quantities are shown."),
+						description: __("Only non-transit warehouses that stock the selected item(s) are shown. Stock sufficiency is checked when you click Create."),
 						get_query: () => {
 							const selected_items = [];
 							dialog.$wrapper.find("tr[data-row-name]").each((index, element) => {
@@ -1294,6 +1295,95 @@ class DuxProcurementPortal {
 					dialog.get_primary_btn().prop("disabled", true);
 					try {
 						const result = await this.call("dux_indent_master.portal.create_delivery_challan_from_portal_indent", {
+							name, selected_items: JSON.stringify(selected), company, warehouse,
+						});
+						const document_name = result.name || result.delivery_challan;
+						if (!document_name) throw new Error(__("Delivery Challan was not returned."));
+						dialog.hide();
+						await this.open_document_detail("delivery_challan", document_name);
+					} catch (error) {
+						dialog.get_primary_btn().prop("disabled", false);
+						this.show_action_error(error, __("Delivery Challan Creation Failed"));
+					}
+				},
+			});
+			dialog.show();
+		} catch (error) {
+			this.show_action_error(error, __("Delivery Challan Creation Failed"));
+		}
+	}
+
+	async create_mr_delivery_challan(name) {
+		try {
+			const data = await this.call("dux_indent_master.portal.get_material_request_delivery_action_data", { name });
+			const balance_items = (data.items || []).filter((row) => Number(row.balance_qty || 0) > 0);
+			if (!balance_items.length) return frappe.msgprint(__("No delivery balance quantity is available."));
+			const rows = balance_items.map((row) => `<tr data-row-name="${this.escape(row.row_name)}" data-max-qty="${this.escape(row.max_qty)}">
+				<td>${this.escape(row.item_name)}</td>
+				<td><input class="form-control duxp-mr-delivery-qty" type="number" min="0" max="${this.escape(row.max_qty)}" step="any" value="${this.escape(row.max_qty)}"></td>
+			</tr>`).join("");
+			const dialog = new frappe.ui.Dialog({
+				title: __("Create Delivery Challan"),
+				fields: [
+					{
+						fieldname: "company",
+						fieldtype: "Link",
+						options: "Company",
+						label: __("Company"),
+						reqd: 1,
+						default: data.company || frappe.defaults.get_default("company") || undefined,
+						onchange: () => dialog.set_value("warehouse", ""),
+					},
+					{
+						fieldname: "warehouse",
+						fieldtype: "Link",
+						options: "Warehouse",
+						label: __("Warehouse"),
+						reqd: 1,
+						description: __("Only non-transit warehouses that stock the selected item(s) are shown. Stock sufficiency is checked when you click Create."),
+						get_query: () => {
+							const selected_items = [];
+							dialog.$wrapper.find("tr[data-row-name]").each((index, element) => {
+								const qty = Number($(element).find(".duxp-mr-delivery-qty").val() || 0);
+								if (qty > 0) selected_items.push({ item_row: $(element).data("row-name"), qty });
+							});
+							return {
+								query: "dux_indent_master.portal.get_material_request_delivery_source_warehouse_options",
+								filters: {
+									company: dialog.get_value("company") || "",
+									material_request_name: name,
+									selected_items: JSON.stringify(selected_items),
+								},
+							};
+						},
+					},
+					{
+						fieldname: "items_html",
+						fieldtype: "HTML",
+						options: `<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr><th>${__("Item Name")}</th><th>${__("Requested Qty")}</th></tr></thead><tbody>${rows}</tbody></table></div>`,
+					},
+				],
+				primary_action_label: __("Create Delivery Challan"),
+				primary_action: async () => {
+					const company = dialog.get_value("company");
+					if (!company) return frappe.msgprint(__("Select a Company."));
+					const warehouse = dialog.get_value("warehouse");
+					if (!warehouse) return frappe.msgprint(__("Select a Warehouse."));
+					const selected = [];
+					let invalid_quantity = false;
+					dialog.$wrapper.find("tr[data-row-name]").each((index, element) => {
+						const qty = Number($(element).find(".duxp-mr-delivery-qty").val() || 0);
+						const max_qty = Number($(element).data("max-qty") || 0);
+						if (qty < 0 || qty > max_qty) invalid_quantity = true;
+						if (qty > 0) selected.push({ item_row: $(element).data("row-name"), qty });
+					});
+					if (invalid_quantity) {
+						return frappe.msgprint(__("Requested Qty cannot exceed the Material Request quantity."));
+					}
+					if (!selected.length) return frappe.msgprint(__("Enter Requested Qty for at least one item."));
+					dialog.get_primary_btn().prop("disabled", true);
+					try {
+						const result = await this.call("dux_indent_master.portal.create_delivery_challan_from_portal_material_request", {
 							name, selected_items: JSON.stringify(selected), company, warehouse,
 						});
 						const document_name = result.name || result.delivery_challan;
@@ -1538,7 +1628,7 @@ class DuxProcurementPortal {
 				.filter((section) => section.position !== "after_tables")
 				.map((section) => this.render_form_section(section, panel_index++))
 				.join("");
-			const tab_tables = tab.key === "details" ? (data.tables || []) : [];
+			const tab_tables = (data.tables || []).filter((table) => (table.tab || "details") === tab.key);
 			const tables = tab_tables
 				.filter((table) => table.position !== "after_tables")
 				.map((table) => this.render_form_table(table, panel_index++))
@@ -1885,6 +1975,15 @@ class DuxProcurementPortal {
 		if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "supplier" && value) {
 			await this.fetch_supplier_party_details(value);
 		}
+		if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "company") {
+			const supplier_control = this.form_controls.supplier;
+			if (supplier_control && supplier_control.get_value()) {
+				await this.fetch_supplier_party_details(supplier_control.get_value());
+			}
+		}
+		if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "tc_name" && value) {
+			await this.apply_purchase_order_terms_template(value);
+		}
 		if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "taxes_and_charges") {
 			await this.apply_purchase_order_tax_template(value);
 		} else if (
@@ -1954,13 +2053,33 @@ class DuxProcurementPortal {
 			"billing_address", "billing_address_display",
 			"dispatch_address", "dispatch_address_display",
 			"contact_person", "contact_display", "contact_mobile", "contact_email",
-			"place_of_supply",
+			"place_of_supply", "company_gstin",
 		].forEach((fieldname) => {
 			const control = this.form_controls[fieldname];
 			if (control && details[fieldname] !== undefined && details[fieldname] !== null) {
 				control.set_value(details[fieldname]);
 			}
 		});
+	}
+
+	async apply_purchase_order_terms_template(template) {
+		const terms_control = this.form_controls.terms;
+		if (!terms_control) return;
+		let rendered_terms;
+		try {
+			rendered_terms = await this.call(
+				"erpnext.setup.doctype.terms_and_conditions.terms_and_conditions.get_terms_and_conditions",
+				{
+					template_name: template,
+					doc: JSON.stringify(this.collect_form_values()),
+				}
+			);
+		} catch (error) {
+			return;
+		}
+		if (rendered_terms !== undefined && rendered_terms !== null) {
+			terms_control.set_value(rendered_terms);
+		}
 	}
 
 	async apply_purchase_order_tax_template(template) {
@@ -2103,7 +2222,14 @@ class DuxProcurementPortal {
 		if (
 			this.form_data && this.form_data.key === "purchase_order"
 			&& ["items", "taxes"].includes(table_fieldname)
-			&& ["item_code", "item_tax_template", "qty", "rate", "charge_type", "account_head"].includes(field.fieldname)
+			&& [
+				"item_code",
+				"item_tax_template",
+				"qty",
+				"rate",
+				"charge_type",
+				"account_head",
+			].includes(field.fieldname)
 		) {
 			// Debounced: typing a rate/qty fires a control change per keystroke, and each
 			// one used to await a full server round-trip. On a document with many rows
@@ -2163,14 +2289,14 @@ class DuxProcurementPortal {
 					? this.form_controls.taxes_and_charges.get_value() : undefined,
 				...this.indent_item_context(table_fieldname, row_index),
 			});
-			["item_name", "description", "stock_uom", "uom", "conversion_factor", "rate", "basic_rate", "warehouse", "source_warehouse", "stock_qty", "gst_hsn_code", "item_tax_template"].forEach((fieldname) => {
+			["item_name", "description", "stock_uom", "uom", "conversion_factor", "last_purchase_rate", "warehouse", "source_warehouse", "stock_qty", "gst_hsn_code", "item_tax_template"].forEach((fieldname) => {
 				const control = controls[fieldname];
 				if (!control || defaults[fieldname] === undefined) return;
 				if (is_indent_item && ["uom", "warehouse", "stock_qty"].includes(fieldname)) {
 					control.set_value(defaults[fieldname]);
 				} else if (["gst_hsn_code", "item_tax_template"].includes(fieldname)) {
 					control.set_value(defaults[fieldname] || "");
-				} else if (fieldname === "stock_qty" || !control.get_value()) {
+				} else if (["stock_qty", "last_purchase_rate"].includes(fieldname) || !control.get_value()) {
 					control.set_value(defaults[fieldname]);
 				}
 			});
