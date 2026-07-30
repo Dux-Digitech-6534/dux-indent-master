@@ -8,6 +8,23 @@ from frappe import _
 from frappe.utils import cint, cstr, flt, getdate, nowdate
 
 from dux_indent_master.api import _get_logged_in_user_details
+from dux_indent_master.security import (
+    INDENT_DOCTYPE,
+    INDENT_ROUTE_KEY,
+    SITE_DOCTYPE,
+    SITE_FIELD,
+    allowed_portal_route_keys,
+    assert_restricted_indent_access,
+    deny_restricted_non_indent_operation,
+    get_restricted_indent_filters,
+    get_restricted_site,
+    get_scoped_site,
+    get_supervisor_site,
+    is_restricted_portal_user,
+    is_site_scoped_portal_user,
+    is_supervisor_portal_user,
+    require_restricted_route,
+)
 
 
 SYSTEM_FIELDS = {"name", "owner", "creation", "modified", "modified_by", "docstatus"}
@@ -658,7 +675,7 @@ FORM_CONFIG = {
         "sections": [
             {
                 "label": "Supplier & Schedule",
-                "fields": ["naming_series", "supplier", "transaction_date", "schedule_date", "company", "custom_site_project", "custom_town", "supplier_warehouse", "set_warehouse", "custom_sap_po_no", "custom_sap_remarks"],
+                "fields": ["naming_series", "supplier", "transaction_date", "schedule_date", "company", "custom_site_project", "custom_town", "supplier_warehouse", "set_warehouse", "custom_sap_po_no", "custom_sap_remarks", "custom_rejection_remark"],
                 "field_overrides": {
                     "custom_sap_po_no": {"force_editable": True},
                     "custom_sap_remarks": {"force_editable": True},
@@ -874,10 +891,14 @@ MENU_GROUPS = [
 @frappe.whitelist()
 def get_portal_bootstrap():
     _require_authenticated_user()
+    scoped_routes = allowed_portal_route_keys()
+    allowed_site = get_scoped_site() if scoped_routes is not None else None
     menu = []
     available_items = {}
 
     for key, config in DOCUMENT_CONFIG.items():
+        if scoped_routes is not None and key not in scoped_routes:
+            continue
         if _can_read_doctype(config["doctype"]):
             available_items[key] = {
                 "key": key,
@@ -892,9 +913,10 @@ def get_portal_bootstrap():
                 ),
             }
 
-    for key, config in LINK_CONFIG.items():
-        if _link_is_available(config):
-            available_items[key] = {"key": key, **deepcopy(config)}
+    if scoped_routes is None:
+        for key, config in LINK_CONFIG.items():
+            if _link_is_available(config):
+                available_items[key] = {"key": key, **deepcopy(config)}
 
     for group in MENU_GROUPS:
         items = [available_items[key] for key in group["items"] if key in available_items]
@@ -914,6 +936,9 @@ def get_portal_bootstrap():
         "company": company,
         "menu": menu,
         "page_length": 20,
+        "restricted_indent_access": scoped_routes is not None,
+        "allowed_site": allowed_site,
+        "default_route": INDENT_ROUTE_KEY if scoped_routes is not None else "dashboard",
     }
 
 
@@ -921,41 +946,74 @@ def get_portal_bootstrap():
 def get_dashboard():
     _require_authenticated_user()
 
-    kpis = [
-        _dashboard_kpi(
-            "pending_material_requests",
-            "Pending Material Requests",
+    scoped = is_site_scoped_portal_user()
+    if scoped:
+        restricted = is_restricted_portal_user()
+        allowed = allowed_portal_route_keys() or set()
+        scoped_filters = get_restricted_indent_filters()
+        kpis = []
+        if INDENT_ROUTE_KEY in allowed:
+            kpis.append(
+                _dashboard_kpi(
+                    "active_dux_indents",
+                    "My Active Material Indents" if restricted else "Active Material Indents",
+                    INDENT_ROUTE_KEY,
+                    {
+                        "docstatus": ["!=", 2],
+                        "status": ["not in", ["Closed", "Cancelled"]],
+                        **scoped_filters,
+                    },
+                )
+            )
+        if "material_request" in allowed:
+            kpis.append(
+                _dashboard_kpi(
+                    "pending_material_requests",
+                    "Pending Material Requests",
+                    "material_request",
+                    {"docstatus": 0, **scoped_filters},
+                )
+            )
+        recent_keys = tuple(
+            key for key in (INDENT_ROUTE_KEY, "material_request") if key in allowed
+        )
+    else:
+        kpis = [
+            _dashboard_kpi(
+                "pending_material_requests",
+                "Pending Material Requests",
+                "material_request",
+                {"docstatus": 0},
+            ),
+            _dashboard_kpi(
+                "open_purchase_orders",
+                "Open Purchase Orders",
+                "purchase_order",
+                {"docstatus": 1, "status": ["not in", ["Completed", "Closed", "Cancelled"]]},
+            ),
+            _dashboard_kpi(
+                "pending_purchase_receipts",
+                "Pending Purchase Receipts",
+                "purchase_receipt",
+                {"docstatus": 0},
+            ),
+            _dashboard_kpi(
+                "active_dux_indents",
+                "Active Dux Indents",
+                INDENT_ROUTE_KEY,
+                {"docstatus": ["!=", 2], "status": ["not in", ["Closed", "Cancelled"]]},
+            ),
+        ]
+        recent_keys = (
+            INDENT_ROUTE_KEY,
             "material_request",
-            {"docstatus": 0},
-        ),
-        _dashboard_kpi(
-            "open_purchase_orders",
-            "Open Purchase Orders",
             "purchase_order",
-            {"docstatus": 1, "status": ["not in", ["Completed", "Closed", "Cancelled"]]},
-        ),
-        _dashboard_kpi(
-            "pending_purchase_receipts",
-            "Pending Purchase Receipts",
             "purchase_receipt",
-            {"docstatus": 0},
-        ),
-        _dashboard_kpi(
-            "active_dux_indents",
-            "Active Dux Indents",
-            "dux_indent_master",
-            {"docstatus": ["!=", 2], "status": ["not in", ["Closed", "Cancelled"]]},
-        ),
-    ]
+            "delivery_challan",
+        )
 
     recent = []
-    for key in (
-        "dux_indent_master",
-        "material_request",
-        "purchase_order",
-        "purchase_receipt",
-        "delivery_challan",
-    ):
+    for key in recent_keys:
         config = DOCUMENT_CONFIG[key]
         if not _can_read_doctype(config["doctype"]):
             continue
@@ -970,6 +1028,7 @@ def get_dashboard():
         for row in frappe.get_list(
             config["doctype"],
             fields=fields,
+            filters=get_restricted_indent_filters() if scoped else {},
             order_by="modified desc",
             limit_page_length=4,
         ):
@@ -990,7 +1049,7 @@ def get_dashboard():
     return {
         "kpis": [kpi for kpi in kpis if kpi],
         "recent": recent[:8],
-        "approvals": _get_open_workflow_actions(),
+        "approvals": [] if scoped else _get_open_workflow_actions(),
         "generated_on": nowdate(),
     }
 
@@ -1006,6 +1065,7 @@ def get_document_list(
     page_length=20,
 ):
     _require_authenticated_user()
+    require_restricted_route(route_key)
     config = _get_document_config(route_key)
     doctype = config["doctype"]
     _require_doctype_permission(doctype, "read")
@@ -1032,6 +1092,7 @@ def get_document_list(
         )
     fields = _unique([column["fieldname"] for column in columns] + ["name", "docstatus", "modified"])
     filters = deepcopy(config.get("default_filters") or {})
+    filters.update(get_restricted_indent_filters())
 
     if status and status != "All" and status_field:
         if status_field == "docstatus":
@@ -1112,6 +1173,7 @@ def get_document_list(
 def get_portal_report(route_key, filters=None, start=0, page_length=20):
     """Run a native Script Report and return a portal-styled page of results."""
     _require_authenticated_user()
+    require_restricted_route(route_key)
     link_config = LINK_CONFIG.get(route_key)
     if not link_config or link_config.get("kind") != "report":
         frappe.throw(_("This report is not available."), frappe.PermissionError)
@@ -1212,6 +1274,8 @@ def _source_is_available(source_route_key, doc):
 
 
 def _create_actions_for_document(source_route_key, doc):
+    if is_site_scoped_portal_user():
+        return []
     if not _source_is_available(source_route_key, doc):
         return []
 
@@ -1425,6 +1489,8 @@ def _document_lifecycle_actions(route_key, doc):
 
 def _document_operational_actions(route_key, doc):
     """Expose custom-app actions only when their native form would expose them."""
+    if is_site_scoped_portal_user():
+        return []
     actions = []
     status = cstr(doc.get("status"))
     can_write = frappe.has_permission(doc.doctype, ptype="write", doc=doc)
@@ -1547,6 +1613,9 @@ def _get_linked_documents(doc):
     Purchase Order Item.material_request). Custom apps also commonly use parent
     Link or Dynamic Link fields, so all three shapes are discovered here.
     """
+    if is_site_scoped_portal_user():
+        return {"total": 0, "groups": []}
+
     candidates = {}
 
     def add_candidate(doctype, name, relation):
@@ -1684,9 +1753,11 @@ def _get_linked_documents(doc):
 @frappe.whitelist()
 def get_document_detail(route_key, name):
     _require_authenticated_user()
+    require_restricted_route(route_key)
     config = _get_document_config(route_key)
     doctype = config["doctype"]
     doc = frappe.get_doc(doctype, name)
+    assert_restricted_indent_access(doc)
     doc.check_permission("read")
     meta = doc.meta
 
@@ -1848,12 +1919,14 @@ def get_document_detail(route_key, name):
 def get_document_form(route_key, name=None):
     """Return an allowlisted portal form schema plus new/existing values."""
     _require_authenticated_user()
+    require_restricted_route(route_key)
     config = _get_document_config(route_key)
     form_config = _get_form_config(route_key)
     doctype = config["doctype"]
 
     if name:
         doc = frappe.get_doc(doctype, name)
+        assert_restricted_indent_access(doc)
         doc.check_permission("read")
         can_update_after_submit = bool(
             _portal_allows_submitted_update(route_key)
@@ -1879,12 +1952,17 @@ def get_document_form(route_key, name=None):
                     doc.set(warehouse_field, None)
         elif doctype == "Dux Indent Master":
             details = _get_logged_in_user_details()
+            if is_restricted_portal_user():
+                doc.owner = frappe.session.user
+                doc.set(SITE_FIELD, get_restricted_site())
             if doc.meta.has_field("user_name"):
                 doc.user_name = details.get("user")
             if doc.meta.has_field("user_full_name"):
                 doc.user_full_name = details.get("full_name") or details.get("user")
             if doc.meta.has_field("department_name"):
                 doc.department_name = details.get("department")
+        if is_supervisor_portal_user():
+            doc.set(SITE_FIELD, get_supervisor_site())
         can_save = True
 
     return _serialize_document_form(route_key, doc, name=name, can_save=can_save)
@@ -1903,6 +1981,8 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
         fields = []
         for fieldname in section["fields"]:
             field_override = deepcopy(field_overrides.get(fieldname) or {})
+            if is_site_scoped_portal_user() and fieldname == SITE_FIELD:
+                field_override["force_read_only"] = True
             if (
                 fieldname in ("schedule_date", "required_date")
                 and meta.has_field("transaction_date")
@@ -2053,6 +2133,8 @@ def _build_mapped_document_form(
 ):
     """Build one unsaved target by merging sources through ERPNext's native mapper."""
     _require_authenticated_user()
+    require_restricted_route(target_route_key)
+    require_restricted_route(source_route_key)
     target_config = _get_document_config(target_route_key)
     _get_form_config(target_route_key)
     mapping = (DOCUMENT_MAPPINGS.get(target_route_key) or {}).get(source_route_key)
@@ -2145,6 +2227,8 @@ def get_mapping_source_options(target_route_key, source_route_key, search=None, 
     """List eligible source documents for the portal's own 'Get Items From' picker
     (replaces the native MultiSelectDialog/frappe.prompt so it matches the portal theme)."""
     _require_authenticated_user()
+    require_restricted_route(target_route_key)
+    require_restricted_route(source_route_key)
     mapping = (DOCUMENT_MAPPINGS.get(target_route_key) or {}).get(source_route_key)
     if not mapping:
         frappe.throw(_("This document mapping is not available."), frappe.PermissionError)
@@ -2224,6 +2308,7 @@ def get_mapped_documents_form(
 def save_portal_document(route_key, values, name=None, mapping_token=None):
     """Create or update a portal document without bypassing native controllers."""
     _require_authenticated_user()
+    require_restricted_route(route_key)
     config = _get_document_config(route_key)
     form_config = _get_form_config(route_key)
     doctype = config["doctype"]
@@ -2233,6 +2318,7 @@ def save_portal_document(route_key, values, name=None, mapping_token=None):
 
     if name:
         doc = frappe.get_doc(doctype, name)
+        assert_restricted_indent_access(doc)
         doc.check_permission("write")
         if doc.docstatus == 2:
             frappe.throw(_("Cancelled documents cannot be edited. Please amend the document."))
@@ -2255,6 +2341,12 @@ def save_portal_document(route_key, values, name=None, mapping_token=None):
         doc = frappe.new_doc(doctype)
         is_new = True
 
+    previous_attachment_values = {
+        fieldname: doc.get(fieldname)
+        for fieldname in _restricted_attachment_fieldnames(doc)
+    }
+    _validate_restricted_indent_payload(route_key, values)
+
     _apply_portal_form_values(
         doc,
         form_config,
@@ -2262,6 +2354,20 @@ def save_portal_document(route_key, values, name=None, mapping_token=None):
         preserve_row_order=bool(mapping_token and not name),
         submitted_update=bool(name and doc.docstatus == 1),
     )
+    if is_restricted_portal_user():
+        if is_new:
+            doc.owner = frappe.session.user
+        doc.set(SITE_FIELD, get_restricted_site())
+        details = _get_logged_in_user_details()
+        if is_new and doc.meta.has_field("user_name"):
+            doc.user_name = frappe.session.user
+        if is_new and doc.meta.has_field("user_full_name"):
+            doc.user_full_name = details.get("full_name") or frappe.session.user
+        if is_new and doc.meta.has_field("department_name"):
+            doc.department_name = details.get("department")
+        _validate_restricted_attachment_values(doc, previous_attachment_values)
+    elif is_supervisor_portal_user():
+        doc.set(SITE_FIELD, get_supervisor_site())
     if is_new and route_key == "material_request":
         doc.material_request_type = "Purchase"
     if doc.docstatus == 0:
@@ -2272,6 +2378,7 @@ def save_portal_document(route_key, values, name=None, mapping_token=None):
         _delete_mapped_document(mapping_token)
     else:
         doc.save()
+    assert_restricted_indent_access(doc)
 
     workflow = _get_portal_workflow_context(doc)
     submit_action = _get_portal_submit_action(doc, workflow)
@@ -2290,9 +2397,11 @@ def save_portal_document(route_key, values, name=None, mapping_token=None):
 def submit_portal_document(route_key, name, workflow_action=None):
     """Submit a draft through its active Workflow or native controller."""
     _require_authenticated_user()
+    require_restricted_route(route_key)
     config = _get_document_config(route_key)
     _get_form_config(route_key)
     doc = frappe.get_doc(config["doctype"], name)
+    assert_restricted_indent_access(doc)
     if not doc.meta.is_submittable or doc.docstatus != 0:
         frappe.throw(_("Only a saved draft document can be submitted."))
 
@@ -2330,9 +2439,11 @@ def submit_portal_document(route_key, name, workflow_action=None):
 def apply_portal_workflow_action(route_key, name, action):
     """Apply one native Frappe Workflow transition available to this user."""
     _require_authenticated_user()
+    require_restricted_route(route_key)
     config = _get_document_config(route_key)
     _get_form_config(route_key)
     doc = frappe.get_doc(config["doctype"], name)
+    assert_restricted_indent_access(doc)
     doc.check_permission("read")
 
     workflow = _get_portal_workflow_context(doc)
@@ -2358,9 +2469,11 @@ def apply_portal_workflow_action(route_key, name, action):
 def update_portal_document_status(route_key, name, action, reason=None):
     """Run an allowlisted native ERPNext Stop/Hold/Close/Re-open action."""
     _require_authenticated_user()
+    require_restricted_route(route_key)
     config = _get_document_config(route_key)
     _get_form_config(route_key)
     doc = frappe.get_doc(config["doctype"], name)
+    assert_restricted_indent_access(doc)
     doc.check_permission("read")
     available = {item["action"]: item for item in _document_lifecycle_actions(route_key, doc)}
     if action not in available or action in ("cancel", "amend"):
@@ -2407,9 +2520,11 @@ def update_portal_document_status(route_key, name, action, reason=None):
 def cancel_portal_document(route_key, name):
     """Cancel a submitted document through its native controller."""
     _require_authenticated_user()
+    require_restricted_route(route_key)
     config = _get_document_config(route_key)
     _get_form_config(route_key)
     doc = frappe.get_doc(config["doctype"], name)
+    assert_restricted_indent_access(doc)
     doc.check_permission("cancel")
     if not doc.meta.is_submittable or doc.docstatus != 1:
         frappe.throw(_("Only a submitted document can be cancelled."))
@@ -2428,9 +2543,11 @@ def cancel_portal_document(route_key, name):
 def get_amended_document_form(route_key, name):
     """Return an editable amendment copy of a cancelled portal document."""
     _require_authenticated_user()
+    require_restricted_route(route_key)
     config = _get_document_config(route_key)
     _get_form_config(route_key)
     doc = frappe.get_doc(config["doctype"], name)
+    assert_restricted_indent_access(doc)
     doc.check_permission("read")
     if not any(item["action"] == "amend" for item in _document_lifecycle_actions(route_key, doc)):
         frappe.throw(_("Amend is not available for this document."), frappe.PermissionError)
@@ -2462,6 +2579,19 @@ def get_portal_item_defaults(
 ):
     """Provide safe item defaults used by new child rows in portal forms."""
     _require_authenticated_user()
+    if is_site_scoped_portal_user():
+        if indent_item_row_name and not indent_name:
+            frappe.throw(_("A Material Indent is required for this item row."), frappe.PermissionError)
+        if indent_name:
+            indent = frappe.get_doc(INDENT_DOCTYPE, indent_name)
+            assert_restricted_indent_access(indent)
+            if indent_item_row_name and indent_item_row_name not in {
+                row.name for row in indent.get("items") or []
+            }:
+                frappe.throw(
+                    _("The selected item row does not belong to your Material Indent."),
+                    frappe.PermissionError,
+                )
     _require_doctype_permission("Item", "read")
     item = frappe.get_doc("Item", item_code)
     item.check_permission("read")
@@ -2527,6 +2657,7 @@ def compute_purchase_order_totals(values):
     """Live-calculate item amounts, tax rows, and totals for an unsaved Purchase Order
     using ERPNext's own tax engine, so the portal's GST/discount math matches the native form."""
     _require_authenticated_user()
+    deny_restricted_non_indent_operation()
     _require_doctype_permission("Purchase Order", "create")
     values = frappe.parse_json(values) if isinstance(values, str) else (values or {})
 
@@ -2616,6 +2747,7 @@ def append_delivery_challan_material(
 ):
     """Append one row to a draft challan using its native document controller."""
     _require_authenticated_user()
+    deny_restricted_non_indent_operation()
     doc = frappe.get_doc("Delivery Challan", name)
     doc.check_permission("write")
     if doc.docstatus != 0:
@@ -2647,6 +2779,7 @@ def append_delivery_challan_material(
 def run_delivery_challan_action(name, action, closure_type=None, shortage_reason=None):
     """Run the same custom-app methods used by the native Delivery Challan form."""
     _require_authenticated_user()
+    deny_restricted_non_indent_operation()
     doc = frappe.get_doc("Delivery Challan", name)
     doc.check_permission("read")
     available = {row["action"] for row in _document_operational_actions("delivery_challan", doc)}
@@ -2682,6 +2815,7 @@ def run_delivery_challan_action(name, action, closure_type=None, shortage_reason
 def get_delivery_challan_receipt_form(name):
     """Build the native, unsaved receipt and render it in the portal form."""
     _require_authenticated_user()
+    deny_restricted_non_indent_operation()
     challan = frappe.get_doc("Delivery Challan", name)
     challan.check_permission("read")
     if not any(
@@ -2708,6 +2842,7 @@ def get_delivery_challan_receipt_form(name):
 def get_dux_indent_action_data(name):
     _require_authenticated_user()
     doc = frappe.get_doc("Dux Indent Master", name)
+    assert_restricted_indent_access(doc)
     doc.check_permission("read")
     if not any(
         row["action"] == "indent_material_purchase"
@@ -2735,6 +2870,7 @@ def get_dux_indent_action_data(name):
 def create_material_request_from_portal_indent(name, selected_items):
     _require_authenticated_user()
     doc = frappe.get_doc("Dux Indent Master", name)
+    assert_restricted_indent_access(doc)
     doc.check_permission("read")
     if not any(
         row["action"] == "indent_material_purchase"
@@ -2760,6 +2896,7 @@ def create_material_request_from_portal_indent(name, selected_items):
 def get_dux_indent_delivery_action_data(name):
     _require_authenticated_user()
     doc = frappe.get_doc("Dux Indent Master", name)
+    assert_restricted_indent_access(doc)
     doc.check_permission("read")
     if not any(
         row["action"] == "indent_delivery_challan"
@@ -2829,6 +2966,7 @@ def get_dux_indent_delivery_action_data(name):
 def create_delivery_challan_from_portal_indent(name, selected_items, company=None, warehouse=None):
     _require_authenticated_user()
     doc = frappe.get_doc("Dux Indent Master", name)
+    assert_restricted_indent_access(doc)
     doc.check_permission("read")
     if not any(
         row["action"] == "indent_delivery_challan"
@@ -2896,6 +3034,7 @@ def get_indent_delivery_source_warehouse_options(
         return []
 
     indent = frappe.get_doc("Dux Indent Master", indent_name)
+    assert_restricted_indent_access(indent)
     indent.check_permission("read")
     indent_rows = {row.name: row for row in indent.get("items") or []}
     required_by_item = defaultdict(float)
@@ -2962,6 +3101,7 @@ def get_indent_delivery_source_warehouse_options(
 @frappe.whitelist()
 def get_material_request_delivery_action_data(name):
     _require_authenticated_user()
+    deny_restricted_non_indent_operation()
     doc = frappe.get_doc("Material Request", name)
     doc.check_permission("read")
     if not any(
@@ -3002,6 +3142,7 @@ def get_material_request_delivery_action_data(name):
 @frappe.whitelist()
 def create_delivery_challan_from_portal_material_request(name, selected_items, company=None, warehouse=None):
     _require_authenticated_user()
+    deny_restricted_non_indent_operation()
     doc = frappe.get_doc("Material Request", name)
     doc.check_permission("read")
     if not any(
@@ -3054,6 +3195,7 @@ def get_material_request_delivery_source_warehouse_options(
 ):
     """Return Company warehouses that can satisfy all currently selected Material Request quantities."""
     _require_authenticated_user()
+    deny_restricted_non_indent_operation()
     _require_doctype_permission("Warehouse", "read")
     filters = frappe.parse_json(filters) if isinstance(filters, str) else (filters or {})
     company = cstr(filters.get("company")).strip()
@@ -3137,6 +3279,7 @@ def get_material_request_delivery_source_warehouse_options(
 def get_dux_indent_stock(name, row_names=None):
     _require_authenticated_user()
     doc = frappe.get_doc("Dux Indent Master", name)
+    assert_restricted_indent_access(doc)
     doc.check_permission("read")
     row_names = frappe.parse_json(row_names) if isinstance(row_names, str) else row_names
     selected = set(row_names or [])
@@ -3185,6 +3328,7 @@ def get_dux_indent_stock(name, row_names=None):
 def get_payment_entry_outstanding(values, mode="invoices"):
     """Return native ERPNext outstanding references for the current form values."""
     _require_authenticated_user()
+    deny_restricted_non_indent_operation()
     values = frappe.parse_json(values) if isinstance(values, str) else values
     if not isinstance(values, dict):
         frappe.throw(_("Invalid Payment Entry values."))
@@ -3234,6 +3378,110 @@ def _get_document_config(route_key):
     if not config:
         frappe.throw(_("Invalid portal route."), frappe.DoesNotExistError)
     return config
+
+
+def _validate_restricted_indent_payload(route_key, values):
+    if is_restricted_portal_user():
+        require_restricted_route(route_key)
+        requested_site = cstr(values.get(SITE_FIELD)).strip()
+        allowed_site = get_restricted_site()
+        if requested_site != allowed_site:
+            frappe.throw(
+                _("Site must be {0} for your DUX Indent Portal access.").format(allowed_site),
+                frappe.PermissionError,
+            )
+        for untrusted_field in ("owner", "created_by"):
+            if untrusted_field in values:
+                frappe.throw(
+                    _("Document ownership is assigned by the server."),
+                    frappe.PermissionError,
+                )
+        if "user_name" in values and cstr(values.get("user_name")).strip() != frappe.session.user:
+            frappe.throw(
+                _("The creator User ID is assigned by the server."),
+                frappe.PermissionError,
+            )
+        return
+    if is_supervisor_portal_user():
+        require_restricted_route(route_key)
+        requested_site = cstr(values.get(SITE_FIELD)).strip()
+        allowed_site = get_supervisor_site()
+        if requested_site and requested_site != allowed_site:
+            frappe.throw(
+                _("Site must be {0} for your DUX Indent Portal access.").format(allowed_site),
+                frappe.PermissionError,
+            )
+        for untrusted_field in ("owner", "created_by"):
+            if untrusted_field in values:
+                frappe.throw(
+                    _("Document ownership is assigned by the server."),
+                    frappe.PermissionError,
+                )
+        return
+
+
+def _restricted_attachment_fieldnames(doc):
+    if not is_restricted_portal_user() or doc.doctype != INDENT_DOCTYPE:
+        return []
+    return [
+        df.fieldname
+        for df in doc.meta.fields
+        if df.fieldtype in ("Attach", "Attach Image")
+    ]
+
+
+def _validate_restricted_attachment_values(doc, previous_values):
+    """Prevent a browser from linking another user's File to an allowed indent."""
+    for fieldname in _restricted_attachment_fieldnames(doc):
+        file_url = cstr(doc.get(fieldname)).strip()
+        if not file_url or file_url == cstr(previous_values.get(fieldname)).strip():
+            continue
+        files = frappe.get_all(
+            "File",
+            filters={"file_url": file_url},
+            fields=["name", "owner", "attached_to_doctype", "attached_to_name"],
+            order_by="creation desc",
+            limit_page_length=2,
+        )
+        if len(files) != 1:
+            frappe.throw(_("The selected attachment is not valid."), frappe.PermissionError)
+        file_doc = files[0]
+        attached_elsewhere = bool(
+            file_doc.attached_to_doctype
+            and (
+                file_doc.attached_to_doctype != INDENT_DOCTYPE
+                or (doc.name and file_doc.attached_to_name not in ("", doc.name))
+            )
+        )
+        if file_doc.owner != frappe.session.user or attached_elsewhere:
+            frappe.throw(
+                _("You can attach only files uploaded by your User ID for this Material Indent."),
+                frappe.PermissionError,
+            )
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def get_portal_site_options(doctype, txt, searchfield, start, page_len, filters=None):
+    """Role-aware Site query used by the portal's Site link control."""
+    _require_authenticated_user()
+    search_text = cstr(txt).strip().lower()
+    if is_site_scoped_portal_user():
+        site = get_scoped_site()
+        if search_text and search_text not in site.lower():
+            return []
+        return [[site]]
+
+    _require_doctype_permission(SITE_DOCTYPE, "read")
+    rows = frappe.get_list(
+        SITE_DOCTYPE,
+        filters={"name": ["like", f"%{cstr(txt).strip()}%"]},
+        fields=["name"],
+        order_by="name asc",
+        start=max(cint(start), 0),
+        page_length=max(cint(page_len), 1),
+    )
+    return [[row.name] for row in rows]
 
 
 def _get_form_config(route_key):

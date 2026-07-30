@@ -329,6 +329,18 @@ body.dux-portal-active .duxp-root {
 	font-size: 10px;
 }
 
+.duxp-logout-btn {
+	width: 28px;
+	height: 28px;
+	min-width: 28px;
+	border-radius: 8px;
+}
+
+.duxp-logout-btn:hover {
+	border-color: #dc2626;
+	color: #dc2626;
+}
+
 .duxp-main {
 	min-width: 0;
 	flex: 1;

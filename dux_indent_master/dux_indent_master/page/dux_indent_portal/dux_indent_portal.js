@@ -68,7 +68,11 @@ class DuxProcurementPortal {
 			this.apply_identity();
 			this.render_navigation();
 			this.start_clock();
-			await this.open_dashboard();
+			if (this.bootstrap.default_route && this.bootstrap.default_route !== "dashboard") {
+				await this.open_document_list(this.bootstrap.default_route);
+			} else {
+				await this.open_dashboard();
+			}
 		} catch (error) {
 			this.initialized = false;
 			this.show_error(error);
@@ -111,6 +115,7 @@ class DuxProcurementPortal {
 						<div class="duxp-avatar" data-role="avatar">DU</div>
 						<div class="duxp-user-copy"><strong data-role="user-name">${__("Loading…")}</strong><span data-role="company"></span></div>
 						<span class="duxp-fy" data-role="fy"></span>
+						<button class="duxp-icon-btn duxp-logout-btn" data-action="logout" aria-label="${__("Log out")}" title="${__("Log out")}">${this.icon("logout", 15)}</button>
 					</div>
 				</aside>
 				<section class="duxp-main">
@@ -139,6 +144,7 @@ class DuxProcurementPortal {
 			const action = $target.data("action");
 			if (action === "theme") this.toggle_theme();
 			if (action === "refresh") this.refresh_current();
+			if (action === "logout") this.logout();
 			if (action === "toggle-activity") this.toggle_activity_panel();
 			if (action === "open-linked-document") this.open_document_detail(
 				$target.data("key"), $target.data("name")
@@ -334,6 +340,11 @@ class DuxProcurementPortal {
 	}
 
 	render_navigation() {
+		const dashboard_link = this.bootstrap.restricted_indent_access ? "" : `
+			<a href="#" class="duxp-nav-item is-active duxp-dashboard-link" data-action="dashboard" data-label="dashboard">
+				${this.icon("dashboard", 16)}<span>${__("Dashboard")}</span>
+			</a>
+		`;
 		const groups = (this.bootstrap.menu || []).map((group) => `
 			<div class="duxp-nav-group">
 				<button class="duxp-nav-heading"><span>${this.escape(group.label)}</span>${this.icon("down", 13)}</button>
@@ -348,9 +359,7 @@ class DuxProcurementPortal {
 		`).join("");
 
 		this.$nav.html(`
-			<a href="#" class="duxp-nav-item is-active duxp-dashboard-link" data-action="dashboard" data-label="dashboard">
-				${this.icon("dashboard", 16)}<span>${__("Dashboard")}</span>
-			</a>
+			${dashboard_link}
 			${groups}
 		`);
 	}
@@ -1787,7 +1796,15 @@ class DuxProcurementPortal {
 				return option_control ? option_control.get_value() : "";
 			};
 		}
-		if (df.fieldtype === "Link" && ["Warehouse", "Account", "Cost Center", "Town At Project"].includes(df.options)) {
+		if (
+			df.fieldtype === "Link"
+			&& df.options === "Site Project"
+			&& this.bootstrap.restricted_indent_access
+		) {
+			df.get_query = () => ({
+				query: "dux_indent_master.portal.get_portal_site_options",
+			});
+		} else if (df.fieldtype === "Link" && ["Warehouse", "Account", "Cost Center", "Town At Project"].includes(df.options)) {
 			df.get_query = () => ({ filters: this.link_filters(df.options) });
 		}
 		const control = frappe.ui.form.make_control({ df, parent: $slot, render_input: true });
@@ -2603,6 +2620,10 @@ class DuxProcurementPortal {
 		}
 	}
 
+	logout() {
+		frappe.app.logout();
+	}
+
 	start_clock() {
 		const update = () => {
 			const now = new Date();
@@ -2759,6 +2780,7 @@ class DuxProcurementPortal {
 			shield: '<path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6zM9 12l2 2 4-5"/>',
 			trash: '<path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/>',
 			print: '<path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M7 14h10v7H7z"/><path d="M17 11h.01"/>',
+			logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
 		};
 		return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.document}</svg>`;
 	}

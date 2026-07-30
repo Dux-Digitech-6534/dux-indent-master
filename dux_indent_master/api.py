@@ -6,10 +6,36 @@ import frappe
 from frappe import _
 from frappe.utils import cstr, flt, fmt_money, formatdate, now, nowdate, nowtime
 
+from dux_indent_master.security import (
+    INDENT_DOCTYPE,
+    assert_restricted_indent_access,
+    deny_restricted_non_indent_operation,
+    is_restricted_portal_user,
+)
+
 
 @frappe.whitelist()
 def get_logged_in_user_details():
     return _get_logged_in_user_details()
+
+
+def _validate_restricted_indent_reference(indent_name=None, indent_item_row_name=None):
+    if not is_restricted_portal_user():
+        return
+    if not indent_name:
+        if indent_item_row_name:
+            frappe.throw(_("A Material Indent is required for this item row."), frappe.PermissionError)
+        return
+    indent = frappe.get_doc(INDENT_DOCTYPE, indent_name)
+    assert_restricted_indent_access(indent)
+    indent.check_permission("read")
+    if indent_item_row_name and indent_item_row_name not in {
+        row.name for row in indent.get("items") or []
+    }:
+        frappe.throw(
+            _("The selected item row does not belong to your Material Indent."),
+            frappe.PermissionError,
+        )
 
 
 @frappe.whitelist()
@@ -51,6 +77,7 @@ def get_indent_item_stock_qty_details(
     indent_name=None,
     indent_item_row_name=None,
 ):
+    _validate_restricted_indent_reference(indent_name, indent_item_row_name)
     bin_actual_qty = flt(get_item_stock_qty(item_code, warehouse))
     submitted_delivery_qty = flt(
         get_indent_item_submitted_delivery_qty(indent_name, indent_item_row_name)
@@ -67,6 +94,7 @@ def get_indent_item_stock_qty_details(
 
 @frappe.whitelist()
 def get_indent_item_submitted_delivery_qty(indent_name=None, indent_item_row_name=None):
+    _validate_restricted_indent_reference(indent_name, indent_item_row_name)
     if not indent_name or not indent_item_row_name:
         return 0
 
@@ -79,6 +107,8 @@ def close_indent(indent_name=None):
         frappe.throw(_("Dux Indent Master is required."))
 
     indent = frappe.get_doc("Dux Indent Master", indent_name)
+    assert_restricted_indent_access(indent)
+    indent.check_permission("write")
     if indent.docstatus != 1:
         frappe.throw(_("Only submitted Dux Indent Master can be closed."))
     if indent.status == "Cancelled":
@@ -101,6 +131,9 @@ def recalculate_indent_delivery_and_stock(indent_name=None):
         frappe.throw(_("Dux Indent Master name is required."))
     if not frappe.db.exists("Dux Indent Master", indent_name):
         frappe.throw(_("Dux Indent Master {0} does not exist.").format(indent_name))
+    indent = frappe.get_doc(INDENT_DOCTYPE, indent_name)
+    assert_restricted_indent_access(indent)
+    indent.check_permission("write")
 
     _sync_delivery_challan_tracking(indent_name)
     indent = frappe.get_doc("Dux Indent Master", indent_name)
@@ -130,6 +163,8 @@ def recalculate_indent_status(indent_name=None):
         frappe.throw(_("Dux Indent Master {0} does not exist.").format(indent_name))
 
     indent = frappe.get_doc("Dux Indent Master", indent_name)
+    assert_restricted_indent_access(indent)
+    indent.check_permission("write")
     _recalculate_indent_transaction_fields(indent)
     indent.update_purchase_status()
     _save_indent(indent)
@@ -158,6 +193,9 @@ def recalculate_indent_status(indent_name=None):
 def debug_last_material_request_specification(indent_name=None):
     if not indent_name:
         frappe.throw(_("Dux Indent Master name is required."))
+    indent = frappe.get_doc(INDENT_DOCTYPE, indent_name)
+    assert_restricted_indent_access(indent)
+    indent.check_permission("read")
 
     if not (
         frappe.db.exists("DocType", "Material Request")
@@ -195,6 +233,8 @@ def debug_last_material_request_specification(indent_name=None):
 @frappe.whitelist()
 def create_material_request_from_indent(indent_name, selected_items):
     indent = frappe.get_doc("Dux Indent Master", indent_name)
+    assert_restricted_indent_access(indent)
+    indent.check_permission("read")
     if indent.docstatus == 2:
         frappe.throw(_("Cannot create Material Request from a cancelled Dux Indent Master."))
     if indent.docstatus != 1:
@@ -270,6 +310,8 @@ def create_delivery_challan_from_indent(indent_name, selected_items=None, compan
         frappe.throw(_("Delivery Challan DocType is not available on this site."))
 
     indent = frappe.get_doc("Dux Indent Master", indent_name)
+    assert_restricted_indent_access(indent)
+    indent.check_permission("read")
     if indent.docstatus == 2:
         frappe.throw(_("Cannot create Delivery Challan from a cancelled Dux Indent Master."))
     _validate_indent_open_for_transactions(indent)
@@ -423,6 +465,7 @@ def _get_mr_delivery_creation_balance_qty(row, submitted_qty, draft_qty):
 
 @frappe.whitelist()
 def create_delivery_challan_from_material_request(mr_name, selected_items=None, company=None, warehouse=None):
+    deny_restricted_non_indent_operation()
     if not mr_name or not frappe.db.exists("Material Request", mr_name):
         frappe.throw(_("Save Material Request before creating a Delivery Challan."))
 
@@ -1866,53 +1909,90 @@ def on_purchase_order_workflow_state_change(doc, method=None):
         )
 
 
-@frappe.whitelist(allow_guest=True)
-def handle_po_approval_action(token):
-    """Land here when a PO Approver clicks Approve/Reject from the email."""
+def _po_approval_page(title, message, is_error=False):
+    color = "#dc2626" if is_error else "#16a34a"
+    html = (
+        "<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:480px;"
+        "margin:80px auto;text-align:center;padding:32px;border:1px solid #e2e8f0;"
+        f"border-radius:8px;\"><h2 style=\"color:{color};margin-bottom:12px;\">{title}"
+        f"</h2><p style=\"color:#374151;font-size:14px;\">{message}</p></div>"
+    )
+    frappe.respond_as_web_page(title, html, indicator_color=color, success=not is_error)
+
+
+def _resolve_po_approval_token(token):
+    """Look up + validate a token. Returns (doc, user, action) or None (page already rendered)."""
     cache_key = f"po_approval_token:{token}"
     raw = frappe.cache().get_value(cache_key)
     data = frappe.parse_json(raw) if raw else None
 
-    def _page(title, message, is_error=False):
-        color = "#dc2626" if is_error else "#16a34a"
-        html = (
-            "<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:480px;"
-            "margin:80px auto;text-align:center;padding:32px;border:1px solid #e2e8f0;"
-            f"border-radius:8px;\"><h2 style=\"color:{color};margin-bottom:12px;\">{title}"
-            f"</h2><p style=\"color:#374151;font-size:14px;\">{message}</p></div>"
-        )
-        frappe.respond_as_web_page(title, html, indicator_color=color, success=not is_error)
-
     if not data:
-        _page(
+        _po_approval_page(
             "Link Expired",
             "This approval link has expired or was already used. Please open the "
             "Purchase Order directly to take action.",
             is_error=True,
         )
-        return
+        return None
 
     po_name, user, action = data.get("po_name"), data.get("user"), data.get("action")
     if not frappe.db.exists("Purchase Order", po_name):
-        _page("Not Found", "This Purchase Order no longer exists.", is_error=True)
-        return
+        _po_approval_page("Not Found", "This Purchase Order no longer exists.", is_error=True)
+        return None
 
     if PO_APPROVAL_ROLE not in frappe.get_roles(user):
-        _page(
+        _po_approval_page(
             "Not Authorized",
             "This action is no longer available for this account.",
             is_error=True,
         )
-        return
+        return None
 
     doc = frappe.get_doc("Purchase Order", po_name)
     if doc.get("workflow_state") != "Pending Approval":
         frappe.cache().delete_value(cache_key)
-        _page(
+        _po_approval_page(
             "Already Actioned",
             f"Purchase Order {po_name} has already been "
             f"{doc.get('workflow_state') or 'processed'}. No further action is needed.",
         )
+        return None
+
+    return doc, user, action
+
+
+@frappe.whitelist(allow_guest=True)
+def handle_po_approval_action(token):
+    """Land here when a PO Approver clicks Approve/Reject from the email.
+
+    Approve acts immediately. Reject shows a small form first so the
+    approver can record why, before the rejection is actually applied.
+    """
+    resolved = _resolve_po_approval_token(token)
+    if not resolved:
+        return
+    doc, user, action = resolved
+
+    if action == "Reject":
+        html = f"""
+        <div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:80px auto;
+            padding:32px;border:1px solid #e2e8f0;border-radius:8px;">
+            <h2 style="color:#dc2626;margin:0 0 12px;">Reject Purchase Order {frappe.utils.escape_html(doc.name)}</h2>
+            <p style="color:#374151;font-size:14px;margin:0 0 16px;">
+                Please share a reason for rejecting this Purchase Order (optional).
+            </p>
+            <form method="POST" action="/api/method/dux_indent_master.api.submit_po_rejection">
+                <input type="hidden" name="token" value="{frappe.utils.escape_html(token)}">
+                <textarea name="remark" rows="4" placeholder="Reason for rejection"
+                    style="width:100%;font-family:inherit;font-size:13px;padding:8px;
+                    border:1px solid #cbd5e1;border-radius:4px;box-sizing:border-box;"></textarea>
+                <button type="submit" style="margin-top:14px;background-color:#dc2626;
+                    color:#ffffff;border:none;font-size:13px;font-weight:bold;padding:10px 22px;
+                    border-radius:4px;cursor:pointer;">Confirm Reject</button>
+            </form>
+        </div>
+        """
+        frappe.respond_as_web_page("Reject Purchase Order", html, indicator_color="orange")
         return
 
     frappe.set_user(user)
@@ -1920,11 +2000,48 @@ def handle_po_approval_action(token):
 
     try:
         apply_workflow(doc, action)
+        frappe.db.commit()
     except Exception as e:
         frappe.db.rollback()
-        _page("Action Failed", cstr(e), is_error=True)
+        _po_approval_page("Action Failed", cstr(e), is_error=True)
         return
 
-    frappe.cache().delete_value(cache_key)
-    verb = "approved" if action == "Approve" else "rejected"
-    _page(f"Purchase Order {verb.title()}", f"Purchase Order {po_name} has been {verb} successfully.")
+    frappe.cache().delete_value(f"po_approval_token:{token}")
+    _po_approval_page(
+        "Purchase Order Approved", f"Purchase Order {doc.name} has been approved successfully."
+    )
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def submit_po_rejection(token, remark=None):
+    """Land here when the Reject form (with remark) is submitted."""
+    resolved = _resolve_po_approval_token(token)
+    if not resolved:
+        return
+    doc, user, action = resolved
+    if action != "Reject":
+        _po_approval_page("Not Authorized", "This action is no longer valid.", is_error=True)
+        return
+
+    frappe.set_user(user)
+    from frappe.model.workflow import apply_workflow
+
+    remark = cstr(remark).strip()
+
+    try:
+        apply_workflow(doc, "Reject")
+        if remark and doc.meta.has_field("custom_rejection_remark"):
+            frappe.db.set_value(
+                doc.doctype, doc.name, "custom_rejection_remark", remark, update_modified=False
+            )
+        frappe.db.commit()
+    except Exception as e:
+        frappe.db.rollback()
+        _po_approval_page("Action Failed", cstr(e), is_error=True)
+        return
+
+    frappe.cache().delete_value(f"po_approval_token:{token}")
+    message = f"Purchase Order {doc.name} has been rejected."
+    if remark:
+        message += f" Remark: {frappe.utils.escape_html(remark)}"
+    _po_approval_page("Purchase Order Rejected", message)
