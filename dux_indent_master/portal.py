@@ -1079,18 +1079,23 @@ def get_document_list(
     _require_doctype_permission(doctype, "read")
 
     meta = frappe.get_meta(doctype)
-    status_field = (
+    native_status_field = (
         "status"
         if _field_exists(meta, "status")
         else "docstatus"
         if meta.is_submittable
         else None
     )
+    workflow_status_field, workflow_status_options = _get_workflow_status_config(doctype)
+    status_field = workflow_status_field or native_status_field
     visible_hidden_columns = set(config.get("show_hidden_columns") or [])
     if status_field:
         visible_hidden_columns.add(status_field)
     columns = _resolve_columns(meta, config["columns"], allow_hidden=visible_hidden_columns)
-    if status_field and not any(column["fieldname"] == status_field for column in columns):
+    status_column_fields = {"status", "docstatus", workflow_status_field}
+    if status_field and not any(
+        column["fieldname"] in status_column_fields for column in columns
+    ):
         columns.extend(
             _resolve_columns(
                 meta,
@@ -1098,7 +1103,16 @@ def get_document_list(
                 allow_hidden=visible_hidden_columns,
             )
         )
-    fields = _unique([column["fieldname"] for column in columns] + ["name", "docstatus", "modified"])
+    fields = _unique(
+        [column["fieldname"] for column in columns]
+        + [
+            "name",
+            "docstatus",
+            "modified",
+            native_status_field,
+            workflow_status_field,
+        ]
+    )
     filters = deepcopy(config.get("default_filters") or {})
     filters.update(get_restricted_indent_filters())
 
@@ -1143,7 +1157,11 @@ def get_document_list(
     )
     if any(column["fieldname"] == "status" for column in columns):
         for row in rows:
-            row.status = _display_status_value(row.get("status"), row.docstatus)
+            row.status = (
+                row.get(workflow_status_field)
+                if workflow_status_field
+                else None
+            ) or _display_status_value(row.get("status"), row.docstatus)
     if any(column["fieldname"] == "docstatus" for column in columns):
         for row in rows:
             row.docstatus = _docstatus_label(row.docstatus)
@@ -1153,7 +1171,9 @@ def get_document_list(
             row[column["fieldname"]] = _resolve_display_value(column, row.get(column["fieldname"]))
 
     status_options = []
-    if status_field == "docstatus":
+    if workflow_status_field:
+        status_options = workflow_status_options
+    elif status_field == "docstatus":
         status_options = ["Draft", "Submitted", "Cancelled"]
     elif status_field:
         status_df = meta.get_field(status_field)
@@ -1414,6 +1434,22 @@ def _get_portal_workflow_context(doc):
             for transition in get_transitions(doc, workflow)
         ],
     }
+
+
+def _get_workflow_status_config(doctype):
+    """Return the active workflow state field and its ordered states."""
+    from frappe.model.workflow import get_workflow_name
+
+    workflow_name = get_workflow_name(doctype)
+    if not workflow_name:
+        return None, []
+
+    workflow = frappe.get_cached_doc("Workflow", workflow_name)
+    state_field = cstr(workflow.workflow_state_field).strip()
+    if not state_field or not _field_exists(frappe.get_meta(doctype), state_field):
+        return None, []
+
+    return state_field, _unique(row.state for row in workflow.states if row.state)
 
 
 def _workflow_action_style(action):
