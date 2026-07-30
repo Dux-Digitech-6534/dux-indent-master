@@ -1117,7 +1117,18 @@ def get_document_list(
     filters.update(get_restricted_indent_filters())
 
     if status and status != "All" and status_field:
-        if status_field == "docstatus":
+        if workflow_status_field:
+            workflow_status_by_label = {
+                _display_workflow_state(option): option
+                for option in workflow_status_options
+            }
+            workflow_status = workflow_status_by_label.get(status)
+            if not workflow_status and status in workflow_status_options:
+                workflow_status = status
+            if not workflow_status:
+                frappe.throw(_("Invalid workflow status filter."))
+            filters[status_field] = workflow_status
+        elif status_field == "docstatus":
             docstatus_by_label = {"Draft": 0, "Submitted": 1, "Cancelled": 2}
             if status not in docstatus_by_label:
                 frappe.throw(_("Invalid status filter."))
@@ -1157,11 +1168,14 @@ def get_document_list(
     )
     if any(column["fieldname"] == "status" for column in columns):
         for row in rows:
+            workflow_status = (
+                row.get(workflow_status_field) if workflow_status_field else None
+            )
             row.status = (
-                row.get(workflow_status_field)
-                if workflow_status_field
-                else None
-            ) or _display_status_value(row.get("status"), row.docstatus)
+                _display_workflow_state(workflow_status)
+                if workflow_status
+                else _display_status_value(row.get("status"), row.docstatus)
+            )
     if any(column["fieldname"] == "docstatus" for column in columns):
         for row in rows:
             row.docstatus = _docstatus_label(row.docstatus)
@@ -1172,7 +1186,9 @@ def get_document_list(
 
     status_options = []
     if workflow_status_field:
-        status_options = workflow_status_options
+        status_options = [
+            _display_workflow_state(option) for option in workflow_status_options
+        ]
     elif status_field == "docstatus":
         status_options = ["Draft", "Submitted", "Cancelled"]
     elif status_field:
@@ -1804,6 +1820,7 @@ def get_document_detail(route_key, name):
     assert_restricted_indent_access(doc)
     doc.check_permission("read")
     meta = doc.meta
+    workflow = _get_portal_workflow_context(doc)
 
     detail_columns = deepcopy(config.get("detail_fields") or config["columns"])
     configured_detail_fields = {
@@ -1824,7 +1841,9 @@ def get_document_detail(route_key, name):
     fields = []
     for column in _resolve_columns(meta, detail_columns, allow_hidden=set(config.get("show_hidden_columns") or [])):
         value = (
-            _docstatus_label(doc.docstatus)
+            _display_workflow_state(workflow["state"])
+            if column["fieldname"] == "status" and workflow["state"]
+            else _docstatus_label(doc.docstatus)
             if column["fieldname"] == "docstatus"
             else doc.get(column["fieldname"])
         )
@@ -1922,7 +1941,6 @@ def get_document_detail(route_key, name):
         _portal_allows_submitted_update(route_key)
         and _can_update_after_submit(doc, _get_form_config(route_key))
     )
-    workflow = _get_portal_workflow_context(doc)
     submit_action = _get_portal_submit_action(doc, workflow)
     workflow_actions = [
         action
@@ -1935,7 +1953,11 @@ def get_document_detail(route_key, name):
         "name": doc.name,
         "label": _(config["label"]),
         "description": _(config["description"]),
-        "status": workflow["state"] or _display_status_value(doc.get("status"), doc.docstatus),
+        "status": (
+            _display_workflow_state(workflow["state"])
+            if workflow["state"]
+            else _display_status_value(doc.get("status"), doc.docstatus)
+        ),
         "docstatus": doc.docstatus,
         "fields": fields,
         "child_tables": child_tables,
@@ -4012,6 +4034,14 @@ def _display_status_value(status, docstatus):
     show it as "Submitted" everywhere status text is displayed."""
     value = status or _docstatus_label(docstatus)
     return _("Submitted") if value == "Approved" else value
+
+
+def _display_workflow_state(state):
+    labels = {
+        "Pending L1 Approval": _("Pending Level 1"),
+        "Pending L2 Approval": _("Pending Level 2"),
+    }
+    return labels.get(cstr(state).strip(), state)
 
 
 def _resolve_display_value(column, value):
