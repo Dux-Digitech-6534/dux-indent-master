@@ -556,6 +556,7 @@ DOCUMENT_CONFIG = {
         "label": "Item",
         "doctype": "Item",
         "icon": "box",
+        "menu_requires_write_or_create": True,
         "description": "Item master, UOM, stock attributes and valuation defaults.",
         "columns": [
             _column("Item Code", "name"),
@@ -899,7 +900,17 @@ def get_portal_bootstrap():
     for key, config in DOCUMENT_CONFIG.items():
         if scoped_routes is not None and key not in scoped_routes:
             continue
-        if _can_read_doctype(config["doctype"]):
+        can_read = _can_read_doctype(config["doctype"])
+        can_write = bool(frappe.has_permission(config["doctype"], ptype="write"))
+        can_create = bool(frappe.has_permission(config["doctype"], ptype="create"))
+        if (
+            can_read
+            and (
+                not config.get("menu_requires_write_or_create")
+                or can_write
+                or can_create
+            )
+        ):
             available_items[key] = {
                 "key": key,
                 "label": _(config.get("menu_label") or config["label"]),
@@ -907,10 +918,7 @@ def get_portal_bootstrap():
                 "description": _(config["description"]),
                 "kind": "document",
                 "doctype": config["doctype"],
-                "can_create": bool(
-                    config.get("allow_create", True)
-                    and frappe.has_permission(config["doctype"], ptype="create")
-                ),
+                "can_create": bool(config.get("allow_create", True) and can_create),
             }
 
     if scoped_routes is None:
@@ -1519,7 +1527,7 @@ def _document_operational_actions(route_key, doc):
                 and frappe.has_permission("Material Request", ptype="create")
             ):
                 actions.append({"action": "indent_material_purchase", "label": _("Material Request"), "style": "primary"})
-            if can_write and frappe.has_permission("Delivery Challan", ptype="create"):
+            if frappe.has_permission("Delivery Challan", ptype="create"):
                 actions.append({"action": "indent_delivery_challan", "label": _("Delivery Challan"), "style": "primary"})
 
     if route_key == "material_request":
