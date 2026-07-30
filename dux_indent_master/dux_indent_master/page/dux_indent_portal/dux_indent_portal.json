@@ -4,7 +4,7 @@
  "docstatus": 0,
  "doctype": "Page",
  "idx": 0,
- "modified": "2026-07-30 15:11:47.507843",
+ "modified": "2026-07-30 20:34:05.149579",
  "modified_by": "Administrator",
  "module": "Dux Indent Master",
  "name": "dux-indent-portal",
@@ -33,7 +33,10 @@
    "role": "Accounts Manager"
   },
   {
-   "role": "DUX Indent MPUSIP 7C User"
+   "role": "Indent Creator"
+  },
+  {
+   "role": "MR Indent Creator"
   }
  ],
  "script": null,

@@ -1513,13 +1513,13 @@ def _document_operational_actions(route_key, doc):
         is_closed = status == "Closed" or cint(doc.get("manually_closed"))
         if doc.get("items") and doc.docstatus != 2:
             actions.append({"action": "indent_view_stock", "label": _("View Stock"), "style": "secondary"})
-        if doc.docstatus == 1 and not is_closed and can_write:
+        if doc.docstatus == 1 and not is_closed:
             if (
                 not doc.get("material_purchase")
                 and frappe.has_permission("Material Request", ptype="create")
             ):
                 actions.append({"action": "indent_material_purchase", "label": _("Material Request"), "style": "primary"})
-            if frappe.has_permission("Delivery Challan", ptype="create"):
+            if can_write and frappe.has_permission("Delivery Challan", ptype="create"):
                 actions.append({"action": "indent_delivery_challan", "label": _("Delivery Challan"), "style": "primary"})
 
     if route_key == "material_request":
