@@ -1037,6 +1037,14 @@ class DuxProcurementPortal {
 		}
 	}
 
+	async open_created_draft(key, name) {
+		const document_name = String(name || "").trim();
+		if (!document_name) {
+			throw new Error(__("The created draft document was not returned."));
+		}
+		await this.open_document_form(key, document_name);
+	}
+
 	async open_amended_document_form(key, name) {
 		const item = this.items[key];
 		if (!item || item.kind !== "document" || !name) return;
@@ -1224,7 +1232,7 @@ class DuxProcurementPortal {
 						name, selected_items: JSON.stringify(selected),
 					});
 					dialog.hide();
-					await this.open_document_detail("material_request", result.material_request);
+					await this.open_created_draft("material_request", result.material_request);
 				},
 			});
 			dialog.show();
@@ -1309,7 +1317,7 @@ class DuxProcurementPortal {
 						const document_name = result.name || result.delivery_challan;
 						if (!document_name) throw new Error(__("Delivery Challan was not returned."));
 						dialog.hide();
-						await this.open_document_detail("delivery_challan", document_name);
+						await this.open_created_draft("delivery_challan", document_name);
 					} catch (error) {
 						dialog.get_primary_btn().prop("disabled", false);
 						this.show_action_error(error, __("Delivery Challan Creation Failed"));
@@ -1398,7 +1406,7 @@ class DuxProcurementPortal {
 						const document_name = result.name || result.delivery_challan;
 						if (!document_name) throw new Error(__("Delivery Challan was not returned."));
 						dialog.hide();
-						await this.open_document_detail("delivery_challan", document_name);
+						await this.open_created_draft("delivery_challan", document_name);
 					} catch (error) {
 						dialog.get_primary_btn().prop("disabled", false);
 						this.show_action_error(error, __("Delivery Challan Creation Failed"));
