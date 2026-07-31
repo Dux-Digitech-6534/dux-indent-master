@@ -36,6 +36,12 @@ class DuxProcurementPortal {
 		});
 		this.$wrapper = $(wrapper).addClass("dux-portal-page");
 		this.$wrapper.find(".page-head").hide();
+		let saved_company = "";
+		try {
+			saved_company = localStorage.getItem("dux-procurement-company") || "";
+		} catch (error) {
+			// Browser storage may be disabled; "All Companies" remains available.
+		}
 		this.state = {
 			route_key: "dashboard",
 			start: 0,
@@ -44,6 +50,7 @@ class DuxProcurementPortal {
 			from_date: "",
 			to_date: "",
 			activity_collapsed: false,
+			company: saved_company,
 		};
 		this.items = {};
 		this.search_timer = null;
@@ -66,6 +73,8 @@ class DuxProcurementPortal {
 				(group.items || []).forEach((item) => (this.items[item.key] = item));
 			});
 			this.apply_identity();
+			this.render_company_filter();
+			this.render_brand();
 			this.render_navigation();
 			this.start_clock();
 			if (this.bootstrap.default_route && this.bootstrap.default_route !== "dashboard") {
@@ -103,7 +112,7 @@ class DuxProcurementPortal {
 			<div class="duxp-root" data-dux-theme="${theme}">
 				<div class="duxp-sidebar-backdrop" data-action="close-sidebar"></div>
 				<aside class="duxp-sidebar">
-					<div class="duxp-brand" aria-label="${__("Jain Engineering Work")}">
+					<div class="duxp-brand" aria-label="${__("Jain Engineering Work")}" data-role="brand-content">
 						<img class="duxp-brand-logo" src="/assets/dux_indent_master/images/jain-engineering-logo.png" alt="${__("Jain Engineering Work")}">
 					</div>
 					<div class="duxp-nav-search">
@@ -123,6 +132,9 @@ class DuxProcurementPortal {
 						<button class="duxp-icon-btn duxp-menu-btn" data-action="open-sidebar" aria-label="${__("Open menu")}">${this.icon("menu", 17)}</button>
 						<div class="duxp-breadcrumb"><span>Dux Portal</span>${this.icon("chevron", 12)}<strong data-role="breadcrumb">${__("Dashboard")}</strong></div>
 						<div class="duxp-top-actions">
+							<select class="duxp-company-filter" data-role="company-filter" aria-label="${__("Company")}">
+								<option value="">${__("All Companies")}</option>
+							</select>
 							<span class="duxp-clock" data-role="clock"></span>
 							<button class="duxp-icon-btn" data-action="refresh" aria-label="${__("Refresh")}">${this.icon("refresh", 16)}</button>
 							<button class="duxp-icon-btn" data-action="theme" aria-label="${__("Toggle theme")}">${this.icon("moon", 16)}</button>
@@ -258,6 +270,11 @@ class DuxProcurementPortal {
 			this.open_document_list(this.state.route_key, true);
 		});
 
+		this.$root.on("change", '[data-role="company-filter"]', (event) => {
+			this.state.start = 0;
+			this.on_company_change(event.currentTarget.value);
+		});
+
 		this.$root.on("change", '[data-role="indent-stock-all"]', (event) => {
 			this.$root.find('[data-role="indent-stock-row"]').prop("checked", Boolean(event.currentTarget.checked));
 			this.update_indent_stock_action_visibility();
@@ -337,6 +354,45 @@ class DuxProcurementPortal {
 		this.$root.find('[data-role="company"]').text(this.bootstrap.company || user.department || "");
 		this.$root.find('[data-role="avatar"], [data-role="top-avatar"]').text(user.initials || "DU");
 		this.$root.find('[data-role="fy"]').text(this.financial_year());
+	}
+
+	render_company_filter() {
+		const companies = this.bootstrap.companies || [];
+		const $select = this.$root.find('[data-role="company-filter"]');
+		if (!companies.length) {
+			$select.hide();
+			return;
+		}
+		const options = [`<option value="">${__("All Companies")}</option>`].concat(
+			companies.map((name) => `<option value="${this.escape(name)}">${this.escape(name)}</option>`)
+		);
+		$select.html(options.join(""));
+		$select.val(this.state.company || "");
+	}
+
+	render_brand() {
+		const primary_company = "Jain Engineering Works (India) Private Limited";
+		const selected = this.state.company;
+		const $brand = this.$root.find('[data-role="brand-content"]');
+		if (!selected || selected === primary_company) {
+			$brand.html(
+				`<img class="duxp-brand-logo" src="/assets/dux_indent_master/images/jain-engineering-logo.png" alt="${__("Jain Engineering Work")}">`
+			);
+		} else {
+			$brand.html(`<div class="duxp-brand-name">${this.escape(selected)}</div>`);
+		}
+	}
+
+	on_company_change(value) {
+		this.state.company = value || "";
+		try {
+			localStorage.setItem("dux-procurement-company", this.state.company);
+		} catch (error) {
+			// Browser storage may be disabled; filter still applies for this session.
+		}
+		this.render_brand();
+		if (this.state.view === "dashboard") this.open_dashboard();
+		else if (this.state.view === "list") this.open_document_list(this.state.route_key, true);
 	}
 
 	render_navigation() {
@@ -576,7 +632,9 @@ class DuxProcurementPortal {
 		this.set_active("dashboard", __("Dashboard"));
 		this.show_loading();
 		try {
-			const data = await this.call("dux_indent_master.portal.get_dashboard");
+			const data = await this.call("dux_indent_master.portal.get_dashboard", {
+				company: this.state.company,
+			});
 			const user = this.bootstrap.user || {};
 			const hour = new Date().getHours();
 			const greeting = hour < 12 ? __("morning") : hour < 17 ? __("afternoon") : __("evening");
@@ -632,6 +690,7 @@ class DuxProcurementPortal {
 				to_date: this.state.to_date,
 				start: this.state.start,
 				page_length: this.bootstrap.page_length || 20,
+				company: this.state.company,
 			});
 			this.current_list = data;
 			this.render_document_list(data);

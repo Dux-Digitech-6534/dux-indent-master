@@ -933,6 +933,7 @@ def get_portal_bootstrap():
 
     details = _get_logged_in_user_details()
     company = frappe.defaults.get_user_default("Company") or frappe.defaults.get_global_default("company")
+    companies = frappe.get_all("Company", order_by="name asc", pluck="name") if scoped_routes is None else []
 
     return {
         "user": {
@@ -942,6 +943,7 @@ def get_portal_bootstrap():
             "initials": _get_initials(details.get("full_name") or frappe.session.user),
         },
         "company": company,
+        "companies": companies,
         "menu": menu,
         "page_length": 20,
         "restricted_indent_access": scoped_routes is not None,
@@ -951,7 +953,7 @@ def get_portal_bootstrap():
 
 
 @frappe.whitelist()
-def get_dashboard():
+def get_dashboard(company=None):
     _require_authenticated_user()
 
     scoped = is_site_scoped_portal_user()
@@ -991,25 +993,33 @@ def get_dashboard():
                 "pending_material_requests",
                 "Pending Material Requests",
                 "material_request",
-                {"docstatus": 0},
+                _apply_company_filter({"docstatus": 0}, "Material Request", company),
             ),
             _dashboard_kpi(
                 "open_purchase_orders",
                 "Open Purchase Orders",
                 "purchase_order",
-                {"docstatus": 1, "status": ["not in", ["Completed", "Closed", "Cancelled"]]},
+                _apply_company_filter(
+                    {"docstatus": 1, "status": ["not in", ["Completed", "Closed", "Cancelled"]]},
+                    "Purchase Order",
+                    company,
+                ),
             ),
             _dashboard_kpi(
                 "pending_purchase_receipts",
                 "Pending Purchase Receipts",
                 "purchase_receipt",
-                {"docstatus": 0},
+                _apply_company_filter({"docstatus": 0}, "Purchase Receipt", company),
             ),
             _dashboard_kpi(
                 "active_dux_indents",
                 "Active Dux Indents",
                 INDENT_ROUTE_KEY,
-                {"docstatus": ["!=", 2], "status": ["not in", ["Closed", "Cancelled"]]},
+                _apply_company_filter(
+                    {"docstatus": ["!=", 2], "status": ["not in", ["Closed", "Cancelled"]]},
+                    "Dux Indent Master",
+                    company,
+                ),
             ),
         ]
         recent_keys = (
@@ -1033,10 +1043,13 @@ def get_dashboard():
         if date_field and _field_exists(meta, date_field):
             fields.append(date_field)
 
+        recent_filters = get_restricted_indent_filters() if scoped else {}
+        if not scoped:
+            recent_filters = _apply_company_filter(recent_filters, config["doctype"], company)
         for row in frappe.get_list(
             config["doctype"],
             fields=fields,
-            filters=get_restricted_indent_filters() if scoped else {},
+            filters=recent_filters,
             order_by="modified desc",
             limit_page_length=4,
         ):
@@ -1071,6 +1084,7 @@ def get_document_list(
     to_date=None,
     start=0,
     page_length=20,
+    company=None,
 ):
     _require_authenticated_user()
     require_restricted_route(route_key)
@@ -1115,6 +1129,7 @@ def get_document_list(
     )
     filters = deepcopy(config.get("default_filters") or {})
     filters.update(get_restricted_indent_filters())
+    _apply_company_filter(filters, doctype, company)
 
     if status and status != "All" and status_field:
         if workflow_status_field:
@@ -3932,6 +3947,30 @@ def _resolve_columns(meta, requested_columns, allow_hidden=None):
 
 def _field_exists(meta, fieldname):
     return fieldname in SYSTEM_FIELDS or bool(meta.has_field(fieldname))
+
+
+def _get_company_filter_field(doctype):
+    """Field to filter this doctype by for the global Company switcher.
+
+    Most transaction doctypes use the standard ``company`` field; Dux Indent
+    Master predates that convention and stores it as ``company_name``
+    instead. Master/settings doctypes (Item, Supplier, ...) have neither and
+    are intentionally left unfiltered.
+    """
+    meta = frappe.get_meta(doctype)
+    if _field_exists(meta, "company"):
+        return "company"
+    if _field_exists(meta, "company_name"):
+        return "company_name"
+    return None
+
+
+def _apply_company_filter(filters, doctype, company):
+    if company and company != "All":
+        field = _get_company_filter_field(doctype)
+        if field:
+            filters[field] = company
+    return filters
 
 
 def _permission_aware_count(doctype, filters, or_filters=None):
