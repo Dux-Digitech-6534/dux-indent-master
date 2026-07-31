@@ -1974,6 +1974,11 @@ def handle_po_approval_action(token):
     doc, user, action = resolved
 
     if action == "Reject":
+        csrf_token = ""
+        if frappe.session and frappe.session.user != "Guest":
+            from frappe.sessions import get_csrf_token
+
+            csrf_token = get_csrf_token()
         html = f"""
         <div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:80px auto;
             padding:32px;border:1px solid #e2e8f0;border-radius:8px;">
@@ -1983,6 +1988,7 @@ def handle_po_approval_action(token):
             </p>
             <form method="POST" action="/api/method/dux_indent_master.api.submit_po_rejection">
                 <input type="hidden" name="token" value="{frappe.utils.escape_html(token)}">
+                <input type="hidden" name="csrf_token" value="{frappe.utils.escape_html(csrf_token)}">
                 <textarea name="remark" rows="4" placeholder="Reason for rejection"
                     style="width:100%;font-family:inherit;font-size:13px;padding:8px;
                     border:1px solid #cbd5e1;border-radius:4px;box-sizing:border-box;"></textarea>
