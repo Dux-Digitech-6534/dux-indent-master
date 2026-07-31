@@ -104,7 +104,7 @@ class DuxProcurementPortal {
 				<div class="duxp-sidebar-backdrop" data-action="close-sidebar"></div>
 				<aside class="duxp-sidebar">
 					<div class="duxp-brand" aria-label="${__("Jain Engineering Work")}">
-						<div class="duxp-brand-name">${__("Jain Engineering Work")}</div>
+						<img class="duxp-brand-logo" src="/assets/dux_indent_master/images/jain-engineering-logo.png" alt="${__("Jain Engineering Work")}">
 					</div>
 					<div class="duxp-nav-search">
 						${this.icon("search", 15)}

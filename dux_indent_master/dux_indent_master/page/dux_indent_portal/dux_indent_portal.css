@@ -143,14 +143,13 @@ body.dux-portal-active .duxp-root {
 	background: var(--duxp-surface);
 }
 
-.duxp-brand-name {
-	max-width: 100%;
-	color: var(--duxp-text);
-	font-size: 18px;
-	font-weight: 760;
-	line-height: 1.2;
-	letter-spacing: 0.01em;
-	text-align: center;
+.duxp-brand-logo {
+	max-width: calc(100% - 16px);
+	max-height: 40px;
+	object-fit: contain;
+	background: #fff;
+	border-radius: 8px;
+	padding: 6px 10px;
 }
 
 .duxp-nav-search {
