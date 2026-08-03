@@ -2005,6 +2005,12 @@ def handle_po_approval_action(token):
     from frappe.model.workflow import apply_workflow
 
     try:
+        # The token + PO_APPROVAL_ROLE checks above already authorize this
+        # specific transition; a portal-only approver may hold no real
+        # Frappe write permission on Purchase Order (by design, so their
+        # desk/portal access stays view-only), which would otherwise make
+        # apply_workflow's internal doc.save() throw a permission error.
+        doc.flags.ignore_permissions = True
         apply_workflow(doc, action)
         frappe.db.commit()
     except Exception as e:
@@ -2035,6 +2041,10 @@ def submit_po_rejection(token, remark=None):
     remark = cstr(remark).strip()
 
     try:
+        # See the matching comment in handle_po_approval_action: the token +
+        # role checks above already authorize this transition even for a
+        # view-only portal approver with no real Frappe write permission.
+        doc.flags.ignore_permissions = True
         apply_workflow(doc, "Reject")
         if remark and doc.meta.has_field("custom_rejection_remark"):
             frappe.db.set_value(
