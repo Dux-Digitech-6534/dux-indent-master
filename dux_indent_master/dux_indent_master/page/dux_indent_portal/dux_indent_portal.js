@@ -132,9 +132,12 @@ class DuxProcurementPortal {
 						<button class="duxp-icon-btn duxp-menu-btn" data-action="open-sidebar" aria-label="${__("Open menu")}">${this.icon("menu", 17)}</button>
 						<div class="duxp-breadcrumb"><span>Dux Portal</span>${this.icon("chevron", 12)}<strong data-role="breadcrumb">${__("Dashboard")}</strong></div>
 						<div class="duxp-top-actions">
-							<select class="duxp-company-filter" data-role="company-filter" aria-label="${__("Company")}">
-								<option value="">${__("All Companies")}</option>
-							</select>
+							<div class="duxp-company-filter-group">
+								<span class="duxp-company-label">${__("Company")}</span>
+								<select class="duxp-company-filter" data-role="company-filter" aria-label="${__("Company")}">
+									<option value="">${__("All Companies")}</option>
+								</select>
+							</div>
 							<span class="duxp-clock" data-role="clock"></span>
 							<button class="duxp-icon-btn" data-action="refresh" aria-label="${__("Refresh")}">${this.icon("refresh", 16)}</button>
 							<button class="duxp-icon-btn" data-action="theme" aria-label="${__("Toggle theme")}">${this.icon("moon", 16)}</button>
@@ -360,7 +363,7 @@ class DuxProcurementPortal {
 		const companies = this.bootstrap.companies || [];
 		const $select = this.$root.find('[data-role="company-filter"]');
 		if (!companies.length) {
-			$select.hide();
+			$select.closest(".duxp-company-filter-group").hide();
 			return;
 		}
 		const options = [`<option value="">${__("All Companies")}</option>`].concat(
@@ -704,7 +707,6 @@ class DuxProcurementPortal {
 		const rows = (data.rows || []).map((row) => `
 			<tr class="duxp-document-row" data-key="${this.escape(data.key)}" data-name="${this.escape(row.name)}">
 				${(data.columns || []).map((column, index) => `<td class="${index === 0 ? "duxp-id-cell" : ""}">${this.format_value(row[column.fieldname], column, row)}</td>`).join("")}
-				<td class="duxp-actions-cell"><button class="duxp-link-button">${this.icon("eye", 13)}${__("View")}</button></td>
 			</tr>
 		`).join("");
 		const start = Number(data.start || 0);
@@ -726,7 +728,7 @@ class DuxProcurementPortal {
 					<label class="duxp-filter-select">${this.icon("calendar", 13)}<input type="date" data-role="from-date" value="${this.escape(this.state.from_date)}" title="${__("From Date")}"></label>
 					<label class="duxp-filter-select">${this.icon("calendar", 13)}<input type="date" data-role="to-date" value="${this.escape(this.state.to_date)}" title="${__("To Date")}"></label>
 				</div>
-				<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr>${(data.columns || []).map((column) => `<th>${this.escape(column.label)}</th>`).join("")}<th class="duxp-actions-cell">${__("Action")}</th></tr></thead><tbody>${rows || `<tr><td colspan="${(data.columns || []).length + 1}">${this.empty_state(__("No documents found"), __("Try changing the search or filters."))}</td></tr>`}</tbody></table></div>
+				<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr>${(data.columns || []).map((column) => `<th>${this.escape(column.label)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${(data.columns || []).length}">${this.empty_state(__("No documents found"), __("Try changing the search or filters."))}</td></tr>`}</tbody></table></div>
 				<div class="duxp-pager"><span>${__("Showing")} ${data.total ? start + 1 : 0}–${end} ${__("of")} ${data.total || 0}</span><div><button data-action="previous" ${can_previous ? "" : "disabled"}>${this.icon("back", 14)}</button><button data-action="next" ${can_next ? "" : "disabled"}>${this.icon("forward", 14)}</button></div></div>
 			</section>
 		`);

@@ -137,7 +137,7 @@ body.dux-portal-active .duxp-root {
 	align-items: center;
 	justify-content: center;
 	min-height: 96px;
-	padding: 10px 8px;
+	padding: 16px 22px;
 	overflow: hidden;
 	border-bottom: 1px solid var(--duxp-border);
 	background: var(--duxp-surface);
@@ -390,31 +390,52 @@ body.dux-portal-active .duxp-root {
 	font-size: 11px;
 }
 
+.duxp-company-filter-group {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+}
+
+.duxp-company-label {
+	color: var(--duxp-text-3);
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.07em;
+	text-transform: uppercase;
+	white-space: nowrap;
+}
+
 .duxp-company-filter {
 	height: 34px;
-	max-width: 190px;
-	padding: 0 10px;
+	max-width: 230px;
+	padding: 0 12px;
 	border: 1px solid var(--duxp-border-strong);
 	border-radius: 10px;
 	background: var(--duxp-surface);
 	color: var(--duxp-text-2);
-	font-size: 12px;
+	font-size: 12.5px;
 	font-weight: 600;
+	cursor: pointer;
+	transition: 0.18s ease;
 }
 
-.duxp-company-filter:hover {
+.duxp-company-filter:hover,
+.duxp-company-filter:focus {
 	border-color: var(--duxp-iris);
 	color: var(--duxp-iris);
 }
 
 .duxp-brand-name {
 	max-width: 100%;
-	color: var(--duxp-text);
-	font-size: 16px;
-	font-weight: 760;
-	line-height: 1.25;
-	letter-spacing: 0.01em;
+	color: var(--duxp-text-2);
+	font-size: 13.5px;
+	font-weight: 650;
+	line-height: 1.55;
+	letter-spacing: 0.03em;
 	text-align: center;
+	text-transform: uppercase;
+	padding-bottom: 12px;
+	border-bottom: 2px solid var(--duxp-iris);
 }
 
 .duxp-icon-btn {
@@ -2569,7 +2590,7 @@ body.dux-portal-active .duxp-root {
 	}
 
 	.duxp-clock,
-	.duxp-company-filter,
+	.duxp-company-filter-group,
 	.duxp-top-actions > .duxp-avatar {
 		display: none;
 	}
