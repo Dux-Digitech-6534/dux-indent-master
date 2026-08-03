@@ -15,11 +15,13 @@ from dux_indent_master.security import (
     SITE_FIELD,
     allowed_portal_route_keys,
     assert_restricted_indent_access,
+    deny_read_only_portal_write,
     deny_restricted_non_indent_operation,
     get_restricted_indent_filters,
     get_restricted_site,
     get_scoped_site,
     get_supervisor_site,
+    is_read_only_portal_user,
     is_restricted_portal_user,
     is_site_scoped_portal_user,
     is_supervisor_portal_user,
@@ -41,7 +43,7 @@ DOCUMENT_MAPPINGS = {
             "label": "Material Request",
             "method": "erpnext.stock.doctype.material_request.material_request.make_purchase_order",
             "multiple": True,
-            "company_filter": True,
+            "company_filter": False,
             "allow_child_item_selection": True,
             "child_fieldname": "items",
             "child_columns": ["item_code", "item_name", "qty", "ordered_qty"],
@@ -155,10 +157,12 @@ DOCUMENT_CONFIG = {
         "columns": [
             _column("Purchase Order", "name"),
             _column("Supplier", "supplier"),
+            _column("Company", "company"),
             _column("Transaction Date", "transaction_date"),
             _column("Required By", "schedule_date"),
             _column("Grand Total", "grand_total"),
             _column("Status", "status"),
+            _column("Rejection Remark", "custom_rejection_remark"),
         ],
         "detail_fields": [
             _column("Purchase Order", "name"),
@@ -685,7 +689,7 @@ FORM_CONFIG = {
             {"label": "Taxes and Charges", "position": "after_tables", "order": 1, "fields": ["taxes_and_charges"]},
             {"label": "Totals", "position": "after_tables", "order": 3, "fields": ["grand_total", "in_words", "rounding_adjustment", "rounded_total", "advance_paid"]},
             {"label": "Supplier Address, Billing & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "billing_address", "billing_address_display", "contact_person", "contact_display", "contact_mobile", "contact_email", "place_of_supply"]},
-            {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display"]},
+            {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display", "ship_to_address"]},
             {"label": "Payment Terms", "tab": "terms_conditions", "tab_label": "Terms & Conditions", "fields": ["payment_terms_template"]},
             {
                 "label": "Terms & Conditions",
@@ -918,7 +922,7 @@ def get_portal_bootstrap():
                 "description": _(config["description"]),
                 "kind": "document",
                 "doctype": config["doctype"],
-                "can_create": bool(config.get("allow_create", True) and can_create),
+                "can_create": bool(config.get("allow_create", True) and can_create and not is_read_only_portal_user()),
             }
 
     if scoped_routes is None:
@@ -1223,7 +1227,9 @@ def get_document_list(
         "page_length": page_length,
         "status_options": status_options,
         "can_create": bool(
-            config.get("allow_create", True) and frappe.has_permission(doctype, ptype="create")
+            config.get("allow_create", True)
+            and frappe.has_permission(doctype, ptype="create")
+            and not is_read_only_portal_user()
         ),
     }
 
@@ -1951,17 +1957,23 @@ def get_document_detail(route_key, name):
             }
         )
 
-    can_write = bool(frappe.has_permission(doctype, ptype="write", doc=doc))
+    read_only_user = is_read_only_portal_user()
+    can_write = bool(frappe.has_permission(doctype, ptype="write", doc=doc)) and not read_only_user
     can_update_after_submit = bool(
         _portal_allows_submitted_update(route_key)
         and _can_update_after_submit(doc, _get_form_config(route_key))
-    )
+    ) and not read_only_user
     submit_action = _get_portal_submit_action(doc, workflow)
     workflow_actions = [
         action
         for action in workflow["actions"]
         if not submit_action or action["action"] != submit_action["action"]
     ]
+    creation_operational_actions = {"indent_material_purchase", "indent_delivery_challan", "mr_delivery_challan"}
+    if read_only_user:
+        # Everything stays visible for a read-only user except Approve/Reject --
+        # the one workflow action this role exists to still allow.
+        workflow_actions = [action for action in workflow_actions if action["action"] in ("Approve", "Reject")]
     return {
         "key": route_key,
         "doctype": doctype,
@@ -1978,19 +1990,23 @@ def get_document_detail(route_key, name):
         "child_tables": child_tables,
         "can_write": can_write,
         "can_edit": bool(doc.docstatus == 0 and can_write),
-        "can_submit": bool(submit_action),
-        "submit_action": submit_action["action"] if submit_action else None,
-        "submit_label": submit_action["label"] if submit_action else None,
+        "can_submit": bool(submit_action) and not read_only_user,
+        "submit_action": submit_action["action"] if submit_action and not read_only_user else None,
+        "submit_label": submit_action["label"] if submit_action and not read_only_user else None,
         "workflow_name": workflow["name"],
         "workflow_state": workflow["state"],
         "workflow_actions": workflow_actions,
         "can_update_after_submit": can_update_after_submit,
         "can_create": bool(
             config.get("allow_create", True) and frappe.has_permission(doctype, ptype="create")
-        ),
-        "create_actions": _create_actions_for_document(route_key, doc),
-        "operational_actions": _document_operational_actions(route_key, doc),
-        "lifecycle_actions": _document_lifecycle_actions(route_key, doc),
+        ) and not read_only_user,
+        "create_actions": [] if read_only_user else _create_actions_for_document(route_key, doc),
+        "operational_actions": [
+            action
+            for action in _document_operational_actions(route_key, doc)
+            if not (read_only_user and action["action"] in creation_operational_actions)
+        ],
+        "lifecycle_actions": [] if read_only_user else _document_lifecycle_actions(route_key, doc),
         "activity": _get_document_activity(doc),
         "linked_documents": _get_linked_documents(doc),
     }
@@ -2000,6 +2016,7 @@ def get_document_detail(route_key, name):
 def get_document_form(route_key, name=None):
     """Return an allowlisted portal form schema plus new/existing values."""
     _require_authenticated_user()
+    deny_read_only_portal_write()
     require_restricted_route(route_key)
     config = _get_document_config(route_key)
     form_config = _get_form_config(route_key)
@@ -2357,6 +2374,8 @@ def get_mapping_source_options(target_route_key, source_route_key, search=None, 
 @frappe.whitelist()
 def get_mapped_document_form(target_route_key, source_route_key, source_name):
     """Build an unsaved target from one source using ERPNext's native mapper."""
+    _require_authenticated_user()
+    deny_read_only_portal_write()
     return _build_mapped_document_form(
         target_route_key,
         source_route_key,
@@ -2373,6 +2392,8 @@ def get_mapped_documents_form(
     company=None,
 ):
     """Build an unsaved target from multiple selected source documents/items."""
+    _require_authenticated_user()
+    deny_read_only_portal_write()
     mapping = (DOCUMENT_MAPPINGS.get(target_route_key) or {}).get(source_route_key) or {}
     if mapping.get("company_filter") and not cstr(company).strip():
         frappe.throw(_("Please select Company before fetching Material Requests."))
@@ -2389,6 +2410,7 @@ def get_mapped_documents_form(
 def save_portal_document(route_key, values, name=None, mapping_token=None):
     """Create or update a portal document without bypassing native controllers."""
     _require_authenticated_user()
+    deny_read_only_portal_write()
     require_restricted_route(route_key)
     config = _get_document_config(route_key)
     form_config = _get_form_config(route_key)
@@ -2478,6 +2500,7 @@ def save_portal_document(route_key, values, name=None, mapping_token=None):
 def submit_portal_document(route_key, name, workflow_action=None):
     """Submit a draft through its active Workflow or native controller."""
     _require_authenticated_user()
+    deny_read_only_portal_write()
     require_restricted_route(route_key)
     config = _get_document_config(route_key)
     _get_form_config(route_key)
@@ -2520,6 +2543,9 @@ def submit_portal_document(route_key, name, workflow_action=None):
 def apply_portal_workflow_action(route_key, name, action):
     """Apply one native Frappe Workflow transition available to this user."""
     _require_authenticated_user()
+    action = cstr(action).strip()
+    if action not in ("Approve", "Reject"):
+        deny_read_only_portal_write()
     require_restricted_route(route_key)
     config = _get_document_config(route_key)
     _get_form_config(route_key)
@@ -2529,7 +2555,6 @@ def apply_portal_workflow_action(route_key, name, action):
 
     workflow = _get_portal_workflow_context(doc)
     available = {item["action"]: item for item in workflow["actions"]}
-    action = cstr(action).strip()
     if not workflow["name"] or action not in available:
         frappe.throw(_("This workflow action is not available."), frappe.PermissionError)
 
@@ -2550,6 +2575,7 @@ def apply_portal_workflow_action(route_key, name, action):
 def update_portal_document_status(route_key, name, action, reason=None):
     """Run an allowlisted native ERPNext Stop/Hold/Close/Re-open action."""
     _require_authenticated_user()
+    deny_read_only_portal_write()
     require_restricted_route(route_key)
     config = _get_document_config(route_key)
     _get_form_config(route_key)
@@ -2601,6 +2627,7 @@ def update_portal_document_status(route_key, name, action, reason=None):
 def cancel_portal_document(route_key, name):
     """Cancel a submitted document through its native controller."""
     _require_authenticated_user()
+    deny_read_only_portal_write()
     require_restricted_route(route_key)
     config = _get_document_config(route_key)
     _get_form_config(route_key)
@@ -2624,6 +2651,7 @@ def cancel_portal_document(route_key, name):
 def get_amended_document_form(route_key, name):
     """Return an editable amendment copy of a cancelled portal document."""
     _require_authenticated_user()
+    deny_read_only_portal_write()
     require_restricted_route(route_key)
     config = _get_document_config(route_key)
     _get_form_config(route_key)
@@ -2828,6 +2856,7 @@ def append_delivery_challan_material(
 ):
     """Append one row to a draft challan using its native document controller."""
     _require_authenticated_user()
+    deny_read_only_portal_write()
     deny_restricted_non_indent_operation()
     doc = frappe.get_doc("Delivery Challan", name)
     doc.check_permission("write")
@@ -2860,6 +2889,7 @@ def append_delivery_challan_material(
 def run_delivery_challan_action(name, action, closure_type=None, shortage_reason=None):
     """Run the same custom-app methods used by the native Delivery Challan form."""
     _require_authenticated_user()
+    deny_read_only_portal_write()
     deny_restricted_non_indent_operation()
     doc = frappe.get_doc("Delivery Challan", name)
     doc.check_permission("read")
@@ -2950,6 +2980,7 @@ def get_dux_indent_action_data(name):
 @frappe.whitelist()
 def create_material_request_from_portal_indent(name, selected_items):
     _require_authenticated_user()
+    deny_read_only_portal_write()
     doc = frappe.get_doc("Dux Indent Master", name)
     assert_restricted_indent_access(doc)
     doc.check_permission("read")
@@ -3046,6 +3077,7 @@ def get_dux_indent_delivery_action_data(name):
 @frappe.whitelist()
 def create_delivery_challan_from_portal_indent(name, selected_items, company=None, warehouse=None):
     _require_authenticated_user()
+    deny_read_only_portal_write()
     doc = frappe.get_doc("Dux Indent Master", name)
     assert_restricted_indent_access(doc)
     doc.check_permission("read")
@@ -3223,6 +3255,7 @@ def get_material_request_delivery_action_data(name):
 @frappe.whitelist()
 def create_delivery_challan_from_portal_material_request(name, selected_items, company=None, warehouse=None):
     _require_authenticated_user()
+    deny_read_only_portal_write()
     deny_restricted_non_indent_operation()
     doc = frappe.get_doc("Material Request", name)
     doc.check_permission("read")

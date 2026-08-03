@@ -21,6 +21,13 @@ MR_ROUTE_KEY = "material_request"
 SUPERVISOR_ROUTE_KEYS = (INDENT_ROUTE_KEY, MR_ROUTE_KEY)
 SUPERVISOR_DOCTYPES = (INDENT_DOCTYPE, MR_DOCTYPE)
 
+# Portal-only view restriction: this role does not touch Frappe's real
+# DocType permissions (so a user's native-desk access for their actual job
+# is untouched) -- it only gates the Dux Portal's own create/save/submit
+# endpoints, for users who should see everything in the portal but never
+# author or change anything there.
+READ_ONLY_ROLE = "Dux Portal Read Only"
+
 
 def is_restricted_portal_user(user=None):
     user = user or frappe.session.user
@@ -186,5 +193,19 @@ def deny_restricted_non_indent_operation():
     if is_site_scoped_portal_user():
         frappe.throw(
             _("This action is not available in your DUX Indent Portal access."),
+            frappe.PermissionError,
+        )
+
+
+def is_read_only_portal_user(user=None):
+    user = user or frappe.session.user
+    roles = frappe.get_roles(user) if user and user != "Guest" else []
+    return bool(user and user not in ("Guest", "Administrator") and READ_ONLY_ROLE in roles)
+
+
+def deny_read_only_portal_write():
+    if is_read_only_portal_user():
+        frappe.throw(
+            _("Your Dux Portal access is view-only. Contact an administrator for changes."),
             frappe.PermissionError,
         )
