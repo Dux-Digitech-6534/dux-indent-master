@@ -46,7 +46,7 @@ class DuxProcurementPortal {
 			route_key: "dashboard",
 			start: 0,
 			search: "",
-			status: "All",
+			statuses: [],
 			from_date: "",
 			to_date: "",
 			activity_collapsed: false,
@@ -54,6 +54,8 @@ class DuxProcurementPortal {
 		};
 		this.items = {};
 		this.search_timer = null;
+		this.po_attachment_queue = [];
+		this.po_attachment_counter = 0;
 		this.updating_indent_company_warehouses = false;
 		this.receipt_loading_challan = null;
 		this.receipt_source_challan = null;
@@ -77,7 +79,10 @@ class DuxProcurementPortal {
 			this.render_brand();
 			this.render_navigation();
 			this.start_clock();
-			if (this.bootstrap.default_route && this.bootstrap.default_route !== "dashboard") {
+			const deep_link = this.get_initial_document_link();
+			if (deep_link) {
+				await this.open_document_detail(deep_link.route_key, deep_link.document_name);
+			} else if (this.bootstrap.default_route && this.bootstrap.default_route !== "dashboard") {
 				await this.open_document_list(this.bootstrap.default_route);
 			} else {
 				await this.open_dashboard();
@@ -85,6 +90,19 @@ class DuxProcurementPortal {
 		} catch (error) {
 			this.initialized = false;
 			this.show_error(error);
+		}
+	}
+
+	get_initial_document_link() {
+		try {
+			const params = new URLSearchParams(window.location.search);
+			const route_key = String(params.get("route_key") || "").trim();
+			const document_name = String(params.get("document_name") || "").trim();
+			const item = this.items[route_key];
+			if (!route_key || !document_name || !item || item.kind !== "document") return null;
+			return { route_key, document_name };
+		} catch (error) {
+			return null;
 		}
 	}
 
@@ -169,6 +187,27 @@ class DuxProcurementPortal {
 			if (action === "open-sidebar") this.$root.addClass("duxp-sidebar-open");
 			if (action === "close-sidebar") this.$root.removeClass("duxp-sidebar-open");
 			if (action === "dashboard") this.open_dashboard();
+			if (action === "toggle-status-filter") {
+				event.stopPropagation();
+				const $filter = $target.closest(".duxp-status-multiselect");
+				const should_open = !$filter.hasClass("is-open");
+				this.$root.find(".duxp-status-multiselect.is-open").removeClass("is-open");
+				$filter.toggleClass("is-open", should_open);
+			}
+			if (action === "apply-status-filter") {
+				event.stopPropagation();
+				const $filter = $target.closest(".duxp-status-multiselect");
+				this.state.statuses = $filter.find('[data-role="status-filter-option"]:checked')
+					.map((index, element) => String(element.value || "")).get().filter(Boolean);
+				this.state.start = 0;
+				this.open_document_list(this.state.route_key, true);
+			}
+			if (action === "clear-status-filter") {
+				event.stopPropagation();
+				this.state.statuses = [];
+				this.state.start = 0;
+				this.open_document_list(this.state.route_key, true);
+			}
 			if (action === "new") this.open_document_form($target.data("key"));
 			if (action === "back-list") this.open_document_list($target.data("key"));
 			if (action === "print-document") this.open_document_print($target.data("key"), $target.data("name"));
@@ -207,7 +246,11 @@ class DuxProcurementPortal {
 			);
 			if (action === "form-back") this.close_document_form();
 			if (action === "add-form-row") this.add_form_row($target.data("table"));
+			if (action === "add-po-charge") this.add_purchase_charge();
+			if (action === "edit-po-charge") this.add_purchase_charge(Number($target.data("index")));
+			if (action === "remove-po-charge") this.remove_purchase_charge(Number($target.data("index")));
 			if (action === "remove-form-row") this.remove_form_row($target.data("table"), Number($target.data("index")));
+			if (action === "remove-po-attachment") this.remove_purchase_order_attachment(String($target.data("attachment-id") || ""));
 			if (action === "save-form") this.save_portal_form(false);
 			if (action === "submit-form") this.confirm_submit_form();
 			if (action === "submit-detail") this.confirm_submit_detail(
@@ -217,6 +260,12 @@ class DuxProcurementPortal {
 			if (action === "previous") this.change_page(-1);
 			if (action === "next") this.change_page(1);
 			if (action === "run-report") this.run_report_filters();
+			if (action === "view-child-table-detail") this.show_child_table_detail(Number($target.data("table-index")));
+		});
+
+		this.$root.on("change", '[data-role="po-attachment-input"]', (event) => {
+			this.queue_purchase_order_attachments(event.currentTarget.files);
+			event.currentTarget.value = "";
 		});
 
 		this.$root.on("click", "[data-route-key]", (event) => {
@@ -265,8 +314,7 @@ class DuxProcurementPortal {
 			}, 350);
 		});
 
-		this.$root.on("change", '[data-role="status-filter"], [data-role="from-date"], [data-role="to-date"]', () => {
-			this.state.status = this.$root.find('[data-role="status-filter"]').val() || "All";
+		this.$root.on("change", '[data-role="from-date"], [data-role="to-date"]', () => {
 			this.state.from_date = this.$root.find('[data-role="from-date"]').val() || "";
 			this.state.to_date = this.$root.find('[data-role="to-date"]').val() || "";
 			this.state.start = 0;
@@ -301,6 +349,9 @@ class DuxProcurementPortal {
 		$(document).off("click.duxCreateMenu").on("click.duxCreateMenu", (event) => {
 			if (!$(event.target).closest(".duxp-dropdown").length) {
 				this.$root.find(".duxp-dropdown.is-open").removeClass("is-open");
+			}
+			if (!$(event.target).closest(".duxp-status-multiselect").length) {
+				this.$root.find(".duxp-status-multiselect.is-open").removeClass("is-open");
 			}
 		});
 		this.$root.on("change", '[name="duxp-picker-select"]', (event) => {
@@ -659,7 +710,7 @@ class DuxProcurementPortal {
 						${this.card_header(__("Recent Activity"), __("latest documents"))}
 						${this.recent_table(data.recent || [])}
 					</div>
-					<div class="duxp-card">
+					<div class="duxp-card duxp-pending-approvals-card">
 						${this.card_header(__("Pending Approvals"), `${(data.approvals || []).length} ${__("awaiting action")}`)}
 						${this.approval_list(data.approvals || [])}
 					</div>
@@ -675,7 +726,7 @@ class DuxProcurementPortal {
 		if (!item) return;
 		if (!preserve_filters || this.state.route_key !== key) {
 			this.state.search = "";
-			this.state.status = "All";
+			this.state.statuses = [];
 			this.state.from_date = "";
 			this.state.to_date = "";
 			this.state.start = 0;
@@ -688,7 +739,7 @@ class DuxProcurementPortal {
 			const data = await this.call("dux_indent_master.portal.get_document_list", {
 				route_key: key,
 				search: this.state.search,
-				status: this.state.status,
+				status: this.state.statuses,
 				from_date: this.state.from_date,
 				to_date: this.state.to_date,
 				start: this.state.start,
@@ -703,7 +754,11 @@ class DuxProcurementPortal {
 	}
 
 	render_document_list(data) {
-		const status_options = ["All", ...(data.status_options || [])];
+		const status_options = data.status_options || [];
+		const selected_statuses = Array.isArray(this.state.statuses) ? this.state.statuses : [];
+		const status_summary = selected_statuses.length === 0 ? __("All Statuses")
+			: selected_statuses.length === 1 ? selected_statuses[0]
+			: `${selected_statuses.length} ${__("selected")}`;
 		const rows = (data.rows || []).map((row) => `
 			<tr class="duxp-document-row" data-key="${this.escape(data.key)}" data-name="${this.escape(row.name)}">
 				${(data.columns || []).map((column, index) => `<td class="${index === 0 ? "duxp-id-cell" : ""}">${this.format_value(row[column.fieldname], column, row)}</td>`).join("")}
@@ -714,6 +769,8 @@ class DuxProcurementPortal {
 		const can_previous = start > 0;
 		const can_next = end < Number(data.total || 0);
 
+		this.$content.addClass("duxp-list-view").removeClass("duxp-detail-view duxp-form-view");
+		this.$content.closest(".duxp-scroll").addClass("duxp-list-scroll-shell");
 		this.$content.html(`
 			<section class="duxp-page-head">
 				<div><h1>${this.escape(data.label)}</h1><p>${this.escape(data.description)}</p></div>
@@ -721,14 +778,31 @@ class DuxProcurementPortal {
 					${data.can_create ? `<button class="duxp-btn duxp-btn-primary" data-action="new" data-key="${this.escape(data.key)}">${this.icon("plus", 14)}${__("New")} ${this.escape(data.label)}</button>` : ""}
 				</div>
 			</section>
-			<section class="duxp-card">
+			<section class="duxp-card duxp-document-list-card">
 				<div class="duxp-filter-bar">
 					<label class="duxp-search-field">${this.icon("search", 14)}<input data-role="list-search" value="${this.escape(this.state.search)}" placeholder="${__("Search")} ${this.escape(data.label)}…"></label>
-					<label class="duxp-filter-select">${this.icon("filter", 13)}<select data-role="status-filter">${status_options.map((option) => `<option ${option === this.state.status ? "selected" : ""}>${this.escape(option)}</option>`).join("")}</select></label>
+					<div class="duxp-status-multiselect">
+						<button type="button" class="duxp-status-filter-trigger" data-action="toggle-status-filter" title="${this.escape(selected_statuses.join(", ") || __("All Statuses"))}" aria-haspopup="true">
+							${this.icon("filter", 13)}<span>${this.escape(status_summary)}</span>${this.icon("chevron", 12)}
+						</button>
+						<div class="duxp-status-filter-menu">
+							<div class="duxp-status-filter-head">
+								<strong>${__("Select Statuses")}</strong>
+								<button type="button" data-action="clear-status-filter">${__("Clear")}</button>
+							</div>
+							<div class="duxp-status-filter-options">
+								${status_options.map((option) => `<label class="duxp-status-filter-option">
+									<input type="checkbox" data-role="status-filter-option" value="${this.escape(option)}" ${selected_statuses.includes(option) ? "checked" : ""}>
+									<span>${this.escape(option)}</span>
+								</label>`).join("")}
+							</div>
+							<button type="button" class="duxp-status-filter-apply" data-action="apply-status-filter">${__("Apply Filter")}</button>
+						</div>
+					</div>
 					<label class="duxp-filter-select">${this.icon("calendar", 13)}<input type="date" data-role="from-date" value="${this.escape(this.state.from_date)}" title="${__("From Date")}"></label>
 					<label class="duxp-filter-select">${this.icon("calendar", 13)}<input type="date" data-role="to-date" value="${this.escape(this.state.to_date)}" title="${__("To Date")}"></label>
 				</div>
-				<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr>${(data.columns || []).map((column) => `<th>${this.escape(column.label)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${(data.columns || []).length}">${this.empty_state(__("No documents found"), __("Try changing the search or filters."))}</td></tr>`}</tbody></table></div>
+				<div class="duxp-table-wrap duxp-document-list-table-wrap"><table class="duxp-table"><thead><tr>${(data.columns || []).map((column) => `<th>${this.escape(column.label)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${(data.columns || []).length}">${this.empty_state(__("No documents found"), __("Try changing the search or filters."))}</td></tr>`}</tbody></table></div>
 				<div class="duxp-pager"><span>${__("Showing")} ${data.total ? start + 1 : 0}–${end} ${__("of")} ${data.total || 0}</span><div><button data-action="previous" ${can_previous ? "" : "disabled"}>${this.icon("back", 14)}</button><button data-action="next" ${can_next ? "" : "disabled"}>${this.icon("forward", 14)}</button></div></div>
 			</section>
 		`);
@@ -752,19 +826,63 @@ class DuxProcurementPortal {
 
 	render_document_detail(data) {
 		this.$content.addClass("duxp-detail-view");
-		const fields = (data.fields || []).map((field) => `
-			<div class="duxp-detail-field"><span>${this.escape(field.label)}</span><strong>${this.format_value(field.value, field, data)}</strong></div>
-		`).join("");
-		const tables = (data.child_tables || []).map((table, table_index) => {
+		const display_child_tables = (data.child_tables || []).map((table) => {
+			if (data.key !== "purchase_order" || table.fieldname !== "taxes") return table;
+			const source_rows = table.rows || [];
+			const groups = this.get_purchase_charge_groups(source_rows);
+			if (!groups.length) return table;
+			const hidden_indices = new Set(groups.flatMap((group) => group.indices));
+			const hidden_row_names = new Set(
+				[...hidden_indices]
+					.map((index) => (source_rows[index] || {})._row_name)
+					.filter(Boolean)
+			);
+			const detail_rows = table.detail_rows || [];
+			return {
+				...table,
+				rows: source_rows.filter((row, index) => !hidden_indices.has(index)),
+				detail_rows: detail_rows.length === source_rows.length
+					? detail_rows.filter((row, index) => !hidden_indices.has(index))
+					: detail_rows.filter((row) => !hidden_row_names.has(row._row_name)),
+				_purchase_charge_groups: groups.map((group) => ({
+					charge: source_rows[group.base_index] || {},
+					tax_rows: group.tax_indices.map((index) => source_rows[index] || {}),
+				})),
+			};
+		});
+		this.detail_data = { ...data, child_tables: display_child_tables };
+		const fields = (data.fields || []).map((field) => {
+			const is_rich_text = field.fieldtype === "Text Editor"
+				&& !/address/i.test(field.fieldname || "");
+			const formatted_value = this.format_value(field.value, field, data);
+			return `<div class="duxp-detail-field ${is_rich_text ? "duxp-detail-field-richtext" : ""}">
+				<span>${this.escape(field.label)}</span>
+				${is_rich_text ? `<div class="duxp-detail-rich-value">${formatted_value}</div>` : `<strong>${formatted_value}</strong>`}
+			</div>`;
+		}).join("");
+		let detail_panel_index = 2;
+		const source_activity = data.activity || {};
+		const detail_files = data.key === "purchase_order" ? (source_activity.attachments || []) : [];
+		const detail_attachments = this.render_document_attachment_previews(detail_files);
+		const tables = display_child_tables.map((table, table_index) => {
+			const table_panel_index = detail_panel_index++;
 			const selectable = data.key === "dux_indent_master" && table.fieldname === "items"
 				&& (data.operational_actions || []).some((action) => action.action === "indent_view_stock");
+			const view_all_button = (table.rows || []).length ? `
+				<button type="button" class="duxp-btn duxp-btn-secondary duxp-btn-sm" data-action="view-child-table-detail" data-table-index="${table_index}">
+					${this.icon("eye", 13)}${__("View all")}
+				</button>
+			` : "";
 			return `
 			<section class="duxp-card duxp-detail-panel">
-				${this.panel_header(table_index + 2, table.label, `${(table.rows || []).length} ${__("rows")}`)}
-				<div class="duxp-table-wrap"><table class="duxp-table"><thead><tr>${selectable ? `<th><input type="checkbox" data-role="indent-stock-all" aria-label="${__("Select all")}"></th>` : ""}<th>#</th>${(table.columns || []).map((column) => `<th>${this.escape(column.label)}</th>`).join("")}</tr></thead><tbody>
+				${this.panel_header(table_panel_index, table.label, `${(table.rows || []).length} ${__("rows")}`, view_all_button)}
+				<div class="duxp-table-wrap duxp-child-detail-table-wrap"><table class="duxp-table duxp-child-detail-table"><thead><tr>${selectable ? `<th><input type="checkbox" data-role="indent-stock-all" aria-label="${__("Select all")}"></th>` : ""}<th>#</th>${(table.columns || []).map((column) => `<th>${this.escape(column.label)}</th>`).join("")}</tr></thead><tbody>
 					${(table.rows || []).map((row, index) => `<tr>${selectable ? `<td><input type="checkbox" data-role="indent-stock-row" value="${this.escape(row._row_name || "")}"></td>` : ""}<td class="duxp-index">${index + 1}</td>${table.columns.map((column) => `<td>${this.format_child_table_value(data, table, row, column)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${(table.columns || []).length + 1 + (selectable ? 1 : 0)}">${this.empty_state(__("No rows"), "")}</td></tr>`}
 				</tbody></table></div>
 			</section>
+			${table._purchase_charge_groups
+				? this.render_purchase_order_detail_charges(table._purchase_charge_groups, detail_panel_index++)
+				: ""}
 		`; }).join("");
 
 		const DROPDOWN_OPERATIONAL_ACTIONS = ["indent_material_purchase", "indent_delivery_challan", "mr_delivery_challan"];
@@ -828,7 +946,12 @@ class DuxProcurementPortal {
 			data-key="${this.escape(data.key)}" data-name="${this.escape(data.name)}"
 			data-workflow-action="${this.escape(data.submit_action || "")}">
 			${this.icon("check", 14)}${this.escape(data.submit_label || __("Save & Submit"))}</button>` : "";
-		const activity = this.render_activity_panel(data.activity || {}, data);
+		const activity_data = data.key === "purchase_order" ? {
+			...source_activity,
+			attachments: [],
+			attachment_logs: [],
+		} : source_activity;
+		const activity = this.render_activity_panel(activity_data, data);
 		const linked_documents = this.render_linked_documents(data.linked_documents || {});
 
 		this.$content.html(`
@@ -850,6 +973,7 @@ class DuxProcurementPortal {
 					<section class="duxp-card duxp-detail-panel">
 						${this.panel_header(1, __("Document Details"), data.doctype)}
 						<div class="duxp-detail-grid">${fields}</div>
+						${detail_attachments}
 					</section>
 					${tables}
 				</main>
@@ -860,6 +984,66 @@ class DuxProcurementPortal {
 			</div>
 		`);
 		this.update_indent_stock_action_visibility();
+	}
+
+	render_document_attachment_previews(files = [], options = {}) {
+		const links = files.map((file) => {
+			const url = this.safe_attachment_url(file.file_url);
+			if (!url) return "";
+			const file_name = file.file_name || this.attachment_file_name(file.file_url) || __("Attachment");
+			const is_image = this.is_image_attachment(file.file_url || file_name);
+			const media = is_image
+				? `<img src="${this.escape(url)}" alt="${this.escape(file_name)}" loading="lazy">`
+				: this.icon("attachment", 20);
+			return `<a class="duxp-document-attachment-preview ${is_image ? "is-image" : "is-file"}" href="${this.escape(url)}" target="_blank"
+				rel="noopener noreferrer" title="${this.escape(file_name)}">
+				<span class="duxp-document-attachment-media">${media}</span>
+				<span class="duxp-document-attachment-copy"><strong>${this.escape(file_name)}</strong><small>${__("Open in new tab")}</small></span>
+				${this.icon("external", 12)}
+			</a>`;
+		}).join("");
+		if (!links) return "";
+		return `<div class="duxp-document-attachment-block ${options.compact ? "is-compact" : ""}">
+			<div class="duxp-document-attachment-heading">
+				<strong>${this.escape(options.label || __("Attachments"))}</strong>
+				<small>${files.length} ${__("files")}</small>
+			</div>
+			<div class="duxp-document-attachment-grid">${links}</div>
+		</div>`;
+	}
+
+	render_purchase_order_detail_charges(groups = [], panel_index) {
+		if (!groups.length) return "";
+		const currency_field = ((this.detail_data || {}).fields || [])
+			.find((field) => field.fieldname === "currency");
+		const currency = (currency_field && currency_field.value)
+			|| frappe.defaults.get_default("currency") || "INR";
+		const money = (value) => format_currency(flt(value), currency);
+		const cards = groups.map((group) => {
+			const charge = group.charge || {};
+			const tax_rows = group.tax_rows || [];
+			const charge_amount = flt(charge.tax_amount);
+			const gst_amount = tax_rows.reduce(
+				(total, row) => total + flt(charge_amount * flt(row.rate) / 100, 2), 0
+			);
+			const gst_summary = tax_rows.length
+				? tax_rows.map((row) => `${this.purchase_charge_tax_kind(row)} ${flt(row.rate)}%`).join(" + ")
+				: __("No GST");
+			return `<article class="duxp-po-charge-card">
+				<div class="duxp-po-charge-main">
+					<span class="duxp-po-charge-label">${this.escape(charge.description || charge.account_head || __("Additional Charge"))}</span>
+					<small>${this.escape(charge.account_head || "")}</small>
+				</div>
+				<div class="duxp-po-charge-value"><span>${__("Charge Amount")}</span><strong>${this.escape(money(charge_amount))}</strong></div>
+				<div class="duxp-po-charge-value"><span>${__("GST")}</span><strong>${this.escape(gst_summary)}</strong></div>
+				<div class="duxp-po-charge-value"><span>${__("GST Amount")}</span><strong>${this.escape(money(gst_amount))}</strong></div>
+				<div class="duxp-po-charge-value duxp-po-charge-total"><span>${__("Total")}</span><strong>${this.escape(money(charge_amount + gst_amount))}</strong></div>
+			</article>`;
+		}).join("");
+		return `<section class="duxp-card duxp-detail-panel duxp-po-additional-charges">
+			${this.panel_header(panel_index, __("Additional Charges"), `${groups.length} ${__("charges")}`)}
+			<div class="duxp-po-charge-list">${cards}</div>
+		</section>`;
 	}
 
 	format_child_table_value(data, table, row, column) {
@@ -878,6 +1062,35 @@ class DuxProcurementPortal {
 			</button>`;
 		}
 		return this.format_value(value, column, row);
+	}
+
+	show_child_table_detail(table_index) {
+		const data = this.detail_data;
+		const table = data && (data.child_tables || [])[table_index];
+		if (!table) return;
+		const columns = table.detail_columns && table.detail_columns.length ? table.detail_columns : (table.columns || []);
+		const rows = table.detail_rows && table.detail_rows.length ? table.detail_rows : (table.rows || []);
+		const cards = rows.map((row) => `
+			<div class="duxp-card" style="margin-bottom:12px;">
+				<table class="duxp-child-detail-item-table">
+					<tbody>
+						${columns.map((column) => `
+							<tr><th>${this.escape(column.label)}</th><td>${this.format_child_table_value(data, table, row, column)}</td></tr>
+						`).join("")}
+					</tbody>
+				</table>
+			</div>
+		`).join("") || this.empty_state(__("No rows"), "");
+		const dialog = new frappe.ui.Dialog({
+			title: table.label,
+			size: "large",
+			fields: [{
+				fieldname: "child_rows_html",
+				fieldtype: "HTML",
+				options: `<div class="duxp-child-detail-dialog">${cards}</div>`,
+			}],
+		});
+		dialog.show();
 	}
 
 	update_indent_stock_action_visibility() {
@@ -1161,13 +1374,20 @@ class DuxProcurementPortal {
 
 	run_workflow_action(key, name, workflow_action) {
 		if (!key || !name || !workflow_action || this.workflow_updating) return;
+		if (key === "purchase_order" && workflow_action === "Reject") {
+			frappe.prompt([
+				{ fieldname: "remark", label: __("Rejection Remark"), fieldtype: "Small Text", reqd: 1 },
+			], (values) => this.execute_workflow_action(key, name, workflow_action, values.remark),
+			__("Reject Purchase Order"), __("Reject"));
+			return;
+		}
 		frappe.confirm(
 			__("Apply workflow action {0} to {1}?", [workflow_action, name]),
 			() => this.execute_workflow_action(key, name, workflow_action)
 		);
 	}
 
-	async execute_workflow_action(key, name, workflow_action) {
+	async execute_workflow_action(key, name, workflow_action, remark = null) {
 		if (this.workflow_updating) return;
 		this.workflow_updating = true;
 		this.$content.find('[data-action="run-workflow"]').prop("disabled", true);
@@ -1176,6 +1396,7 @@ class DuxProcurementPortal {
 				route_key: key,
 				name,
 				action: workflow_action,
+				remark: remark || undefined,
 			});
 			frappe.show_alert({
 				message: `${result.name} · ${result.workflow_state || result.status}`,
@@ -1684,6 +1905,10 @@ class DuxProcurementPortal {
 	}
 
 	render_document_form(data) {
+		if (data !== this.form_data) {
+			this.po_attachment_queue = [];
+		}
+		this.$content.addClass("duxp-form-view").removeClass("duxp-detail-view");
 		this.form_data = data;
 		this.form_controls = {};
 		this.table_controls = {};
@@ -1772,6 +1997,11 @@ class DuxProcurementPortal {
 	}
 
 	render_form_section(section, panel_index) {
+		const field_controls = (section.fields || []).map((field) => {
+			const control = `<div class="duxp-form-control" data-fieldname="${this.escape(field.fieldname)}"></div>`;
+			const attachment_control = field.fieldname === "custom_sap_remarks" ? this.render_purchase_order_attachment_control() : "";
+			return `${control}${attachment_control}`;
+		}).join("");
 		const collapsed = Boolean(section.collapsible && section.collapsed);
 		const meta = `${(section.fields || []).length} ${__("fields")}`;
 		const header = section.collapsible ? `<div class="duxp-panel-header duxp-collapsible-header" data-action="toggle-form-section"
@@ -1783,22 +2013,192 @@ class DuxProcurementPortal {
 			<section class="duxp-card duxp-form-section ${collapsed ? "is-collapsed" : ""}">
 				${header}
 				<div class="duxp-form-section-body"><div class="duxp-form-grid">
-					${(section.fields || []).map((field) => `<div class="duxp-form-control" data-fieldname="${this.escape(field.fieldname)}"></div>`).join("")}
+					${field_controls}
 				</div></div>
 			</section>
 		`;
 	}
 
+	render_purchase_order_attachment_control() {
+		if (!this.form_data || this.form_data.key !== "purchase_order" || !this.form_data.can_save) return "";
+		const existing_attachments = this.render_document_attachment_previews(
+			this.form_data.attachments || [],
+			{ compact: true, label: __("Existing Attachments") }
+		);
+		return `<div class="duxp-po-attachment-control">
+			<label class="duxp-po-attachment-label">${__("Attachments")}</label>
+			${existing_attachments}
+			<label class="duxp-po-attachment-picker">
+				<input type="file" multiple data-role="po-attachment-input">
+				<span class="duxp-po-attachment-icon">${this.icon("attachment", 18)}</span>
+				<span><strong>${__("Choose files")}</strong><small>${__("Images, PDF and other file types are supported")}</small></span>
+			</label>
+			<div class="duxp-po-attachment-summary" data-role="po-attachment-summary"></div>
+			<div class="duxp-po-attachment-list" data-role="po-attachment-list">${this.render_purchase_order_attachment_items()}</div>
+		</div>`;
+	}
+
+	render_purchase_order_attachment_items() {
+		const queue = this.po_attachment_queue || [];
+		if (!queue.length) return `<span class="duxp-po-attachment-empty">${__("No files selected")}</span>`;
+		return queue.map((entry) => `<div class="duxp-po-attachment-item">
+			<span class="duxp-po-attachment-file-icon">${this.icon("attachment", 13)}</span>
+			<span class="duxp-po-attachment-copy"><strong title="${this.escape(entry.file.name)}">${this.escape(entry.file.name)}</strong><small>${this.escape(this.format_attachment_size(entry.file.size))}</small></span>
+			<button type="button" class="duxp-icon-btn duxp-po-attachment-remove" data-action="remove-po-attachment"
+				data-attachment-id="${this.escape(entry.id)}" aria-label="${__("Remove file")}" title="${__("Remove file")}">${this.icon("trash", 13)}</button>
+		</div>`).join("");
+	}
+
 	render_form_table(table, panel_index) {
 		const rows = table.rows || [];
+		const visible_fields = (table.fields || []).filter((field) => !field.hide_in_form);
+		if (this.form_data && this.form_data.key === "purchase_order" && table.fieldname === "taxes") {
+			return this.render_purchase_order_tax_sections(table, panel_index, visible_fields);
+		}
 		return `
 			<section class="duxp-card duxp-form-section duxp-form-table-section" data-form-table="${this.escape(table.fieldname)}">
 				${this.panel_header(panel_index, table.label, `${rows.length} ${__("rows")}`)}
 				<div class="duxp-form-table-wrap">
-					<table class="duxp-form-table"><thead><tr><th>#</th>${(table.fields || []).map((field) => `<th>${this.escape(field.label)}${field.reqd ? '<span class="duxp-required">*</span>' : ""}</th>`).join("")}<th></th></tr></thead>
-					<tbody>${rows.map((row, row_index) => `<tr><td class="duxp-index">${row_index + 1}</td>${table.fields.map((field) => `<td><div class="duxp-form-control duxp-table-control" data-table="${this.escape(table.fieldname)}" data-index="${row_index}" data-fieldname="${this.escape(field.fieldname)}"></div></td>`).join("")}<td><button class="duxp-row-remove" data-action="remove-form-row" data-table="${this.escape(table.fieldname)}" data-index="${row_index}" ${this.form_data.can_save ? "" : "disabled"} aria-label="${__("Remove row")}">${this.icon("trash", 14)}</button></td></tr>`).join("") || `<tr><td colspan="${table.fields.length + 2}">${this.empty_state(__("No rows"), __("Use Add Row to begin."))}</td></tr>`}</tbody></table>
+					<table class="duxp-form-table"><thead><tr><th>#</th>${visible_fields.map((field) => `<th>${this.escape(field.label)}${field.reqd ? '<span class="duxp-required">*</span>' : ""}</th>`).join("")}<th></th></tr></thead>
+					<tbody>${rows.map((row, row_index) => `<tr><td class="duxp-index">${row_index + 1}</td>${visible_fields.map((field) => `<td data-label="${this.escape(field.label)}${field.reqd ? " *" : ""}"><div class="duxp-form-control duxp-table-control" data-table="${this.escape(table.fieldname)}" data-index="${row_index}" data-fieldname="${this.escape(field.fieldname)}"></div></td>`).join("")}<td class="duxp-row-remove-cell"><button class="duxp-row-remove" data-action="remove-form-row" data-table="${this.escape(table.fieldname)}" data-index="${row_index}" ${this.form_data.can_save ? "" : "disabled"} aria-label="${__("Remove row")}">${this.icon("trash", 14)}</button></td></tr>`).join("") || `<tr><td colspan="${visible_fields.length + 2}">${this.empty_state(__("No rows"), __("Use Add Row to begin."))}</td></tr>`}</tbody></table>
 				</div>
 				${this.form_data.can_save ? `<div class="duxp-table-footer"><button class="duxp-btn duxp-btn-secondary" data-action="add-form-row" data-table="${this.escape(table.fieldname)}">${this.icon("plus", 14)}${__("Add Row")}</button></div>` : ""}
+			</section>
+		`;
+	}
+
+	get_purchase_charge_groups(rows = []) {
+		const shared_tax_indices = rows.reduce((indices, row, row_index) => {
+			if (
+				String(row.charge_type || "") === "On Previous Row Total"
+				&& this.is_purchase_gst_tax_row(row)
+			) indices.push(row_index);
+			return indices;
+		}, []);
+		const shared_reference_index = shared_tax_indices.length
+			? Number((rows[shared_tax_indices[0]] || {}).row_id) - 1 : -1;
+		const first_shared_tax_index = shared_tax_indices.length
+			? Math.min(...shared_tax_indices) : -1;
+
+		return rows.reduce((groups, row, base_index) => {
+			if (String(row.charge_type || "") !== "Actual" || this.is_purchase_gst_tax_row(row)) return groups;
+			const legacy_tax_indices = rows.reduce((indices, candidate, candidate_index) => {
+				if (
+					String(candidate.charge_type || "") === "On Previous Row Amount"
+					&& this.is_purchase_gst_tax_row(candidate)
+					&& Number(candidate.row_id) === base_index + 1
+				) indices.push(candidate_index);
+				return indices;
+			}, []);
+			const uses_shared_taxes = !legacy_tax_indices.length
+				&& shared_reference_index >= 0
+				&& base_index <= shared_reference_index
+				&& base_index < first_shared_tax_index;
+			const tax_indices = legacy_tax_indices.length
+				? legacy_tax_indices : uses_shared_taxes ? shared_tax_indices : [];
+			groups.push({
+				base_index,
+				tax_indices,
+				indices: [base_index, ...legacy_tax_indices],
+				uses_shared_taxes,
+			});
+			return groups;
+		}, []);
+	}
+
+	is_purchase_gst_tax_row(row = {}) {
+		return ["CGST", "SGST", "IGST"].includes(this.purchase_charge_tax_kind(row));
+	}
+
+	capture_purchase_tax_references(rows = []) {
+		const references = new Map();
+		rows.forEach((row) => {
+			if (!["On Previous Row Amount", "On Previous Row Total"].includes(String(row.charge_type || ""))) return;
+			const referenced_row = rows[Number(row.row_id) - 1];
+			if (referenced_row) references.set(row, referenced_row);
+		});
+		return references;
+	}
+
+	restore_purchase_tax_references(rows = [], references = new Map()) {
+		rows.forEach((row) => {
+			if (!references.has(row)) return;
+			const reference_index = rows.indexOf(references.get(row));
+			row.row_id = reference_index >= 0 ? String(reference_index + 1) : "";
+		});
+	}
+
+	purchase_charge_tax_kind(row = {}) {
+		const searchable = `${row.account_head || ""} ${row.description || ""}`.toLowerCase();
+		if (searchable.includes("cgst")) return "CGST";
+		if (searchable.includes("sgst")) return "SGST";
+		if (searchable.includes("igst")) return "IGST";
+		return __("GST");
+	}
+
+	format_purchase_charge_currency(value) {
+		const currency_field = (this.form_data.sections || [])
+			.flatMap((section) => section.fields || [])
+			.find((field) => field.fieldname === "currency");
+		const currency = (currency_field && currency_field.value)
+			|| frappe.defaults.get_default("currency") || "INR";
+		return format_currency(flt(value), currency);
+	}
+
+	render_purchase_order_tax_sections(table, panel_index, visible_fields) {
+		const rows = table.rows || [];
+		const groups = this.get_purchase_charge_groups(rows);
+		const grouped_indices = new Set(groups.flatMap((group) => group.indices));
+		const normal_rows = rows
+			.map((row, row_index) => ({ row, row_index }))
+			.filter(({ row_index }) => !grouped_indices.has(row_index));
+		const normal_row_html = normal_rows.map(({ row_index }) => `<tr>
+			<td class="duxp-index">${row_index + 1}</td>
+			${visible_fields.map((field) => `<td data-label="${this.escape(field.label)}${field.reqd ? " *" : ""}"><div class="duxp-form-control duxp-table-control" data-table="${this.escape(table.fieldname)}" data-index="${row_index}" data-fieldname="${this.escape(field.fieldname)}"></div></td>`).join("")}
+			<td class="duxp-row-remove-cell"><button class="duxp-row-remove" data-action="remove-form-row" data-table="${this.escape(table.fieldname)}" data-index="${row_index}" ${this.form_data.can_save ? "" : "disabled"} aria-label="${__("Remove row")}">${this.icon("trash", 14)}</button></td>
+		</tr>`).join("");
+		const hidden_controls = [...grouped_indices].sort((a, b) => a - b).map((row_index) =>
+			visible_fields.map((field) => `<div class="duxp-form-control duxp-table-control" data-table="${this.escape(table.fieldname)}" data-index="${row_index}" data-fieldname="${this.escape(field.fieldname)}"></div>`).join("")
+		).join("");
+		const charge_cards = groups.map((group) => {
+			const charge = rows[group.base_index] || {};
+			const tax_rows = group.tax_indices.map((index) => rows[index] || {});
+			const charge_amount = flt(charge.tax_amount);
+			const gst_amount = tax_rows.reduce(
+				(total, row) => total + flt(charge_amount * flt(row.rate) / 100, 2), 0
+			);
+			const gst_summary = tax_rows.length
+				? tax_rows.map((row) => `${this.purchase_charge_tax_kind(row)} ${flt(row.rate)}%`).join(" + ")
+				: __("No GST");
+			return `<article class="duxp-po-charge-card" data-po-charge-base-index="${group.base_index}">
+				<div class="duxp-po-charge-main">
+					<span class="duxp-po-charge-label">${this.escape(charge.description || charge.account_head || __("Additional Charge"))}</span>
+					<small>${this.escape(charge.account_head || "")}</small>
+				</div>
+				<div class="duxp-po-charge-value"><span>${__("Charge Amount")}</span><strong data-po-charge-value="charge">${this.escape(this.format_purchase_charge_currency(charge_amount))}</strong></div>
+				<div class="duxp-po-charge-value"><span>${__("GST")}</span><strong>${this.escape(gst_summary)}</strong></div>
+				<div class="duxp-po-charge-value"><span>${__("GST Amount")}</span><strong data-po-charge-value="gst">${this.escape(this.format_purchase_charge_currency(gst_amount))}</strong></div>
+				<div class="duxp-po-charge-value duxp-po-charge-total"><span>${__("Total")}</span><strong data-po-charge-value="total">${this.escape(this.format_purchase_charge_currency(charge_amount + gst_amount))}</strong></div>
+				${this.form_data.can_save ? `<div class="duxp-po-charge-actions">
+					<button type="button" class="duxp-icon-btn" data-action="edit-po-charge" data-index="${group.base_index}" aria-label="${__("Edit charge")}" title="${__("Edit charge")}">${this.icon("edit", 14)}</button>
+					<button type="button" class="duxp-icon-btn duxp-po-charge-delete" data-action="remove-po-charge" data-index="${group.base_index}" aria-label="${__("Remove charge")}" title="${__("Remove charge")}">${this.icon("trash", 14)}</button>
+				</div>` : ""}
+			</article>`;
+		}).join("");
+		return `
+			<section class="duxp-card duxp-form-section duxp-form-table-section" data-form-table="${this.escape(table.fieldname)}">
+				${this.panel_header(panel_index, table.label, `${normal_rows.length} ${__("tax rows")}`)}
+				<div class="duxp-form-table-wrap">
+					<table class="duxp-form-table"><thead><tr><th>#</th>${visible_fields.map((field) => `<th>${this.escape(field.label)}${field.reqd ? '<span class="duxp-required">*</span>' : ""}</th>`).join("")}<th></th></tr></thead>
+					<tbody>${normal_row_html || `<tr><td colspan="${visible_fields.length + 2}">${this.empty_state(__("No item tax rows"), __("Select a tax template or use Add Row."))}</td></tr>`}</tbody></table>
+				</div>
+				<div class="duxp-po-charge-hidden-controls" hidden>${hidden_controls}</div>
+				${this.form_data.can_save ? `<div class="duxp-table-footer"><button class="duxp-btn duxp-btn-secondary" data-action="add-form-row" data-table="${this.escape(table.fieldname)}">${this.icon("plus", 14)}${__("Add Tax Row")}</button></div>` : ""}
+			</section>
+			<section class="duxp-card duxp-form-section duxp-po-additional-charges">
+				<div class="duxp-panel-header"><span>+</span><h3>${__("Additional Charges")}</h3><small>${groups.length} ${__("charges")}</small></div>
+                <div class="duxp-po-charge-list">${charge_cards || this.empty_state(__("No additional charges"), __("Add freight, loading/unloading, labour or another charge with GST."))}</div>
+				${this.form_data.can_save ? `<div class="duxp-table-footer"><button class="duxp-btn duxp-btn-secondary" data-action="add-po-charge">${this.icon("plus", 14)}${__("Add Additional Charge")}</button></div>` : ""}
 			</section>
 		`;
 	}
@@ -1820,7 +2220,7 @@ class DuxProcurementPortal {
 			this.table_controls[table.fieldname] = [];
 			(table.rows || []).forEach((row, row_index) => {
 				const row_controls = {};
-				(table.fields || []).forEach((field) => {
+				(table.fields || []).filter((field) => !field.hide_in_form).forEach((field) => {
 					const $slot = this.$content.find(`.duxp-table-control[data-table="${table.fieldname}"][data-index="${row_index}"][data-fieldname="${field.fieldname}"]`).first();
 					const control = this.make_form_control($slot, field, row[field.fieldname], true);
 					row_controls[field.fieldname] = control;
@@ -1873,7 +2273,14 @@ class DuxProcurementPortal {
 			df.get_query = () => ({
 				query: "dux_indent_master.portal.get_portal_site_options",
 			});
-		} else if (df.fieldtype === "Link" && ["Warehouse", "Account", "Cost Center", "Town At Project"].includes(df.options)) {
+		} else if (df.fieldtype === "Link" && df.options === "Purchase Taxes and Charges Template") {
+			df.get_query = () => ({
+				filters: {
+					company: this.form_company_value() || ["in", []],
+					disabled: 0,
+				},
+			});
+		} else if (df.fieldtype === "Link" && ["Warehouse", "Account", "Cost Center", "Project", "Town At Project"].includes(df.options)) {
 			df.get_query = () => ({ filters: this.link_filters(df.options) });
 		}
 		const control = frappe.ui.form.make_control({ df, parent: $slot, render_input: true });
@@ -1900,6 +2307,8 @@ class DuxProcurementPortal {
 		if (["Warehouse", "Account", "Cost Center"].includes(options)) {
 			filters.is_group = 0;
 			if (company) filters.company = company;
+		} else if (options === "Project") {
+			if (company) filters.company = company;
 		} else if (options === "Town At Project") {
 			const site_project_control = this.form_controls["custom_site_project"];
 			const site_project_value = site_project_control ? site_project_control.get_value() : "";
@@ -1916,7 +2325,7 @@ class DuxProcurementPortal {
 			const control = this.form_controls[fieldname];
 			if (control && control.get_value()) return control.get_value();
 		}
-		return "";
+		return this.state && this.state.company ? this.state.company : "";
 	}
 
 	parent_form_values() {
@@ -2046,6 +2455,19 @@ class DuxProcurementPortal {
 
 	async handle_parent_control_change(fieldname, value) {
 		this.refresh_indent_attachment_preview(fieldname);
+		// Controls are recreated whenever a child row is added or removed. Frappe's
+		// initial set_value can emit an asynchronous change after the handler is
+		// attached, so do not treat the already-rendered tax template as a user
+		// selection. Otherwise adding a manual tax row immediately reloads the
+		// template and replaces the table with its original rows.
+        if (this.form_data && this.form_data.key === "purchase_order"
+            && ["taxes_and_charges", "payment_terms_template"].includes(fieldname)) {
+            if (fieldname === "taxes_and_charges" && this.suppress_po_tax_template_reload) return;
+			const rendered_field = (this.form_data.sections || [])
+				.flatMap((section) => section.fields || [])
+				.find((field) => field.fieldname === fieldname);
+			if (rendered_field && String(rendered_field.value || "") === String(value || "")) return;
+		}
 		if (this.form_data && this.form_data.key === "delivery_receipts"
 			&& this.form_data.is_new && fieldname === "delivery_challan" && value) {
 			if (value === this.receipt_source_challan || value === this.receipt_loading_challan) return;
@@ -2062,11 +2484,11 @@ class DuxProcurementPortal {
 			await this.fetch_supplier_party_details(value);
 		}
 		if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "company") {
-			const supplier_control = this.form_controls.supplier;
-			if (supplier_control && supplier_control.get_value()) {
-				await this.fetch_supplier_party_details(supplier_control.get_value());
-			}
+			await this.refresh_purchase_order_company_context(value);
 		}
+        if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "payment_terms_template" && value) {
+            await this.apply_purchase_order_payment_terms_template(value);
+        }
 		if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "tc_name" && value) {
 			await this.apply_purchase_order_terms_template(value);
 		}
@@ -2121,6 +2543,80 @@ class DuxProcurementPortal {
 		this.refresh_form_dependencies();
 	}
 
+	async refresh_purchase_order_company_context(company) {
+		if (!this.form_data || this.form_data.key !== "purchase_order") return;
+		this.sync_form_data_from_controls();
+		const tax_control = this.form_controls.taxes_and_charges;
+		const previous_template = tax_control ? tax_control.get_value() : "";
+		let defaults = {};
+		if (company) {
+			try {
+				defaults = (await this.call("dux_indent_master.portal.get_purchase_order_company_refresh", {
+					company,
+					taxes_and_charges: previous_template || undefined,
+				})) || {};
+			} catch (error) {
+				defaults = {};
+			}
+		}
+
+		const company_link_options = new Set([
+			"Warehouse", "Account", "Cost Center", "Project", "Town At Project",
+		]);
+		(this.form_data.sections || []).forEach((section) => {
+			(section.fields || []).forEach((field) => {
+				if (field.fieldname === "company") {
+					field.value = company || "";
+				} else if (field.fieldname === "taxes_and_charges") {
+					field.value = defaults.taxes_and_charges || "";
+				} else if (field.fieldtype === "Link" && company_link_options.has(field.options)) {
+					field.value = "";
+				}
+			});
+		});
+
+		(this.form_data.tables || []).forEach((table) => {
+			if (table.fieldname === "taxes") {
+				table.rows = [];
+				return;
+			}
+			const company_fields = (table.fields || []).filter((field) => (
+				field.fieldtype === "Link"
+				&& (company_link_options.has(field.options) || field.options === "Item Tax Template")
+			));
+			(table.rows || []).forEach((row) => {
+				company_fields.forEach((field) => {
+					row[field.fieldname] = "";
+				});
+			});
+		});
+
+		this.render_document_form(this.form_data);
+		const mapped_template = defaults.taxes_and_charges || "";
+		if (mapped_template) {
+			await this.apply_purchase_order_tax_template(mapped_template);
+		} else {
+			await this.recalculate_purchase_order_totals();
+		}
+
+		const supplier_control = this.form_controls.supplier;
+		if (supplier_control && supplier_control.get_value()) {
+			await this.fetch_supplier_party_details(supplier_control.get_value());
+		}
+		for (let index = 0; index < (this.table_controls.items || []).length; index += 1) {
+			const controls = this.table_controls.items[index] || {};
+			const item_code = controls.item_code ? controls.item_code.get_value() : "";
+			if (item_code) await this.apply_item_defaults("items", index, item_code);
+		}
+		await this.recalculate_purchase_order_totals();
+		frappe.show_alert({
+			message: mapped_template
+				? __("Company defaults and GST template refreshed.")
+				: __("Company defaults refreshed. Select a GST template for this company."),
+			indicator: mapped_template ? "green" : "orange",
+		});
+	}
+
 	async fetch_supplier_party_details(supplier) {
 		let details;
 		try {
@@ -2147,6 +2643,39 @@ class DuxProcurementPortal {
 			}
 		});
 	}
+
+    async apply_purchase_order_payment_terms_template(template) {
+        const table = (this.form_data.tables || []).find((item) => item.fieldname === "payment_schedule");
+        if (!table || !template) return;
+        this.sync_form_data_from_controls();
+        const posting_date_control = this.form_controls.transaction_date;
+        const grand_total_control = this.form_controls.rounded_total || this.form_controls.grand_total;
+        const posting_date = posting_date_control ? posting_date_control.get_value() : "";
+        const grand_total = grand_total_control ? flt(grand_total_control.get_value()) : 0;
+        let schedule;
+        try {
+            schedule = await this.call("erpnext.controllers.accounts_controller.get_payment_terms", {
+                terms_template: template,
+                posting_date,
+                grand_total,
+                base_grand_total: grand_total,
+            });
+        } catch (error) {
+            return;
+        }
+        table.rows = (schedule || []).map((row) => ({
+            _row_name: null,
+            payment_term: row.payment_term || "",
+            due_date: row.due_date || "",
+            invoice_portion: flt(row.invoice_portion),
+            payment_amount: flt(row.payment_amount),
+        }));
+        this.render_document_form(this.form_data);
+        frappe.show_alert({
+            message: __("Payment schedule updated from {0}", [template]),
+            indicator: "green",
+        });
+    }
 
 	async apply_purchase_order_terms_template(template) {
 		const terms_control = this.form_controls.terms;
@@ -2217,10 +2746,16 @@ class DuxProcurementPortal {
 				const row = (result.items || [])[index];
 				if (controls.amount && row && row.amount !== undefined) controls.amount.set_value(flt(row.amount, 2));
 			});
+			const tax_table = (this.form_data.tables || []).find((table) => table.fieldname === "taxes");
 			(this.table_controls.taxes || []).forEach((controls, index) => {
 				const row = (result.taxes || [])[index];
-				if (controls.tax_amount && row && row.tax_amount !== undefined) controls.tax_amount.set_value(flt(row.tax_amount, 2));
+				if (row && row.tax_amount !== undefined) {
+					const tax_amount = flt(row.tax_amount, 2);
+					if (controls.tax_amount) controls.tax_amount.set_value(tax_amount);
+					if (tax_table && tax_table.rows[index]) tax_table.rows[index].tax_amount = tax_amount;
+				}
 			});
+			this.refresh_purchase_charge_card_values();
 			const totals = result.totals || {};
 			["grand_total", "rounding_adjustment", "rounded_total"].forEach((fieldname) => {
 				const control = this.form_controls[fieldname];
@@ -2233,6 +2768,25 @@ class DuxProcurementPortal {
 				this.recalculate_purchase_order_totals();
 			}
 		}
+	}
+
+	refresh_purchase_charge_card_values() {
+		if (!this.form_data || this.form_data.key !== "purchase_order") return;
+		const table = (this.form_data.tables || []).find((item) => item.fieldname === "taxes");
+		if (!table) return;
+		this.get_purchase_charge_groups(table.rows || []).forEach((group) => {
+			const charge = table.rows[group.base_index] || {};
+			const charge_amount = flt(charge.tax_amount);
+			const gst_amount = group.tax_indices.reduce((total, index) => {
+				const tax_row = table.rows[index] || {};
+				return total + flt(charge_amount * flt(tax_row.rate) / 100, 2);
+			}, 0);
+			const $card = this.$content.find(`[data-po-charge-base-index="${group.base_index}"]`);
+			if (!$card.length) return;
+			$card.find('[data-po-charge-value="charge"]').text(this.format_purchase_charge_currency(charge_amount));
+			$card.find('[data-po-charge-value="gst"]').text(this.format_purchase_charge_currency(gst_amount));
+			$card.find('[data-po-charge-value="total"]').text(this.format_purchase_charge_currency(charge_amount + gst_amount));
+		});
 	}
 
 	refresh_indent_attachment_preview(fieldname) {
@@ -2277,6 +2831,55 @@ class DuxProcurementPortal {
 		}
 	}
 
+	queue_purchase_order_attachments(file_list) {
+		if (!this.form_data || this.form_data.key !== "purchase_order" || !this.form_data.can_save) return;
+		const files = Array.from(file_list || []).filter((file) => file && file.name);
+		files.forEach((file) => {
+			this.po_attachment_counter += 1;
+			this.po_attachment_queue.push({ id: `po-file-${Date.now()}-${this.po_attachment_counter}`, file });
+		});
+		this.refresh_purchase_order_attachment_queue();
+	}
+
+	remove_purchase_order_attachment(attachment_id) {
+		this.po_attachment_queue = (this.po_attachment_queue || []).filter((entry) => entry.id !== attachment_id);
+		this.refresh_purchase_order_attachment_queue();
+	}
+
+	refresh_purchase_order_attachment_queue() {
+		const queue = this.po_attachment_queue || [];
+		this.$content.find('[data-role="po-attachment-summary"]').text(
+			queue.length ? __("{0} file(s) ready to upload", [queue.length]) : ""
+		);
+		this.$content.find('[data-role="po-attachment-list"]').html(this.render_purchase_order_attachment_items());
+	}
+
+	format_attachment_size(bytes) {
+		const size = Number(bytes || 0);
+		if (size < 1024) return `${size} B`;
+		if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+		return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+	}
+
+	async upload_purchase_order_attachment(file, docname) {
+		const form_data = new FormData();
+		form_data.append("file", file, file.name);
+		form_data.append("doctype", "Purchase Order");
+		form_data.append("docname", docname);
+		form_data.append("is_private", "1");
+		const response = await fetch("/api/method/upload_file", {
+			method: "POST",
+			headers: { "X-Frappe-CSRF-Token": frappe.csrf_token || "" },
+			credentials: "same-origin",
+			body: form_data,
+		});
+		const payload = await response.json().catch(() => ({}));
+		if (!response.ok || payload.exc || !payload.message) {
+			throw new Error(payload.exception || payload.exc || __("Unable to upload {0}", [file.name]));
+		}
+		return payload.message;
+	}
+
 	async get_payment_outstanding(mode) {
 		if (!this.form_data || this.form_data.key !== "payment_entry" || !this.form_data.can_save) return;
 		try {
@@ -2315,6 +2918,9 @@ class DuxProcurementPortal {
 				"rate",
 				"charge_type",
 				"account_head",
+				"category",
+				"add_deduct_tax",
+				"tax_amount",
 			].includes(field.fieldname)
 		) {
 			// Debounced: typing a rate/qty fires a control change per keystroke, and each
@@ -2377,7 +2983,14 @@ class DuxProcurementPortal {
 			});
 			["item_name", "description", "stock_uom", "uom", "conversion_factor", "last_purchase_rate", "warehouse", "source_warehouse", "stock_qty", "gst_hsn_code", "item_tax_template"].forEach((fieldname) => {
 				const control = controls[fieldname];
-				if (!control || defaults[fieldname] === undefined) return;
+				if (defaults[fieldname] === undefined) return;
+				if (!control) {
+					const table = (this.form_data.tables || []).find((item) => item.fieldname === table_fieldname);
+					if (["item_tax_template", "warehouse"].includes(fieldname) && table && table.rows[row_index]) {
+						table.rows[row_index][fieldname] = defaults[fieldname] || "";
+					}
+					return;
+				}
 				if (is_indent_item && ["uom", "warehouse", "stock_qty"].includes(fieldname)) {
 					control.set_value(defaults[fieldname]);
 				} else if (["gst_hsn_code", "item_tax_template"].includes(fieldname)) {
@@ -2418,7 +3031,11 @@ class DuxProcurementPortal {
 		});
 		(this.form_data.tables || []).forEach((table) => {
 			values[table.fieldname] = (this.table_controls[table.fieldname] || []).map((row_controls, index) => {
-				const row = { _row_name: (table.rows[index] || {})._row_name || null };
+				const source_row = table.rows[index] || {};
+				const row = { _row_name: source_row._row_name || null };
+				(table.fields || []).filter((field) => field.hide_in_form).forEach((field) => {
+					row[field.fieldname] = source_row[field.fieldname] ?? "";
+				});
 				Object.entries(row_controls).forEach(([fieldname, control]) => {
 					if (control) row[fieldname] = control.get_value();
 				});
@@ -2454,12 +3071,464 @@ class DuxProcurementPortal {
 		this.render_document_form(this.form_data);
 	}
 
+	purchase_charge_tax_defaults(rows, groups, gst_accounts, template_name, edit_group = null) {
+		const grouped_indices = new Set((groups || []).flatMap((group) => group.indices));
+		const source_rows = edit_group
+			? edit_group.tax_indices.map((index) => rows[index] || {})
+			: rows.filter((row, index) => !grouped_indices.has(index));
+		const find_tax = (kind) => source_rows.find((row) => this.purchase_charge_tax_kind(row) === kind) || {};
+		const cgst = find_tax("CGST");
+		const sgst = find_tax("SGST");
+		const igst = find_tax("IGST");
+		const rate_match = String(template_name || "").match(/(\d+(?:\.\d+)?)\s*%/);
+		const template_rate = rate_match ? flt(rate_match[1]) : 18;
+		let tax_type = String(template_name || "").includes("out-state") ? "IGST" : "CGST + SGST";
+		if (edit_group) {
+			tax_type = igst.account_head ? "IGST"
+				: cgst.account_head || sgst.account_head ? "CGST + SGST" : "No GST";
+		}
+		return {
+			tax_type,
+			cgst_account: cgst.account_head || gst_accounts.cgst || "",
+			sgst_account: sgst.account_head || gst_accounts.sgst || "",
+			igst_account: igst.account_head || gst_accounts.igst || "",
+			cgst_rate: flt(cgst.rate) || template_rate / 2,
+			sgst_rate: flt(sgst.rate) || template_rate / 2,
+			igst_rate: flt(igst.rate) || template_rate,
+		};
+	}
+
+	replace_purchase_charge_group_rows(rows, group, replacement_rows) {
+		const removed_indices = new Set(group.indices);
+		const old_references = new Map(rows.map((row, index) => [index, Number(row.row_id)]));
+		const row_number_map = new Map();
+		const result = [];
+		let replacement_base_number = 0;
+		rows.forEach((row, index) => {
+			if (index === group.base_index) {
+				replacement_base_number = result.length + 1;
+				result.push(...replacement_rows);
+			}
+			if (removed_indices.has(index)) return;
+			row_number_map.set(index + 1, result.length + 1);
+			result.push(row);
+		});
+		replacement_rows.slice(1).forEach((row) => {
+			row.row_id = String(replacement_base_number);
+		});
+		result.forEach((row) => {
+			if (replacement_rows.includes(row)) return;
+			if (!["On Previous Row Amount", "On Previous Row Total"].includes(String(row.charge_type || ""))) return;
+			const old_index = rows.indexOf(row);
+			const old_reference = old_references.get(old_index);
+			if (row_number_map.has(old_reference)) row.row_id = String(row_number_map.get(old_reference));
+		});
+		return result;
+	}
+
+	async add_purchase_charge(edit_row_index = null) {
+		if (!this.form_data || this.form_data.key !== "purchase_order" || !this.form_data.can_save) return;
+		const company = this.form_company_value();
+		if (!company) {
+			frappe.msgprint({ message: __("Please select Company before adding a charge."), indicator: "orange" });
+			return;
+		}
+
+		const table = (this.form_data.tables || []).find((item) => item.fieldname === "taxes");
+		if (!table) return;
+		const groups = this.get_purchase_charge_groups(table.rows || []);
+		const edit_group = Number.isInteger(edit_row_index)
+			? groups.find((group) => group.base_index === edit_row_index) || null : null;
+
+		let presets = [
+			{ key: "freight_forwarding", label: __("Freight and Forwarding"), account_head: "" },
+			{ key: "loading_unloading", label: __("Loading and Unloading"), account_head: "" },
+            { key: "labour_charges", label: __("Labour Charges"), account_head: "" },
+		];
+		let gst_accounts = { cgst: "", sgst: "", igst: "" };
+		try {
+			const configured = await this.call("dux_indent_master.portal.get_portal_purchase_charge_options", { company });
+			if (Array.isArray(configured) && configured.length) {
+				presets = configured;
+			} else if (configured) {
+				if (Array.isArray(configured.charges) && configured.charges.length) presets = configured.charges;
+				gst_accounts = { ...gst_accounts, ...(configured.gst_accounts || {}) };
+			}
+		} catch (error) {
+			// The dialog remains usable; Account Heads can still be selected manually.
+		}
+
+		const editing_charge = edit_group ? table.rows[edit_group.base_index] || {} : {};
+		if (editing_charge.description && !presets.some((preset) => preset.label === editing_charge.description)) {
+			presets.push({ key: "existing_charge", label: editing_charge.description, account_head: editing_charge.account_head || "" });
+		}
+		const template_control = this.form_controls.taxes_and_charges;
+		const template_name = template_control ? String(template_control.get_value() || "").toLowerCase() : "";
+		const tax_defaults = this.purchase_charge_tax_defaults(
+			table.rows || [], groups, gst_accounts, template_name, edit_group
+		);
+		const account_query = () => ({ filters: { company, is_group: 0, disabled: 0 } });
+		let dialog;
+		const set_default_account = () => {
+			if (!dialog) return;
+			const selected = presets.find((preset) => preset.label === dialog.get_value("charge_label"));
+			dialog.set_value("account_head", selected && selected.account_head ? selected.account_head : "");
+		};
+		dialog = new frappe.ui.Dialog({
+			title: edit_group ? __("Edit Additional Charge") : __("Add Additional Charge with GST"),
+			fields: [
+				{
+					fieldname: "charge_label",
+					label: __("Charge"),
+					fieldtype: "Select",
+					options: presets.map((preset) => preset.label).join("\n"),
+					reqd: 1,
+					change: set_default_account,
+				},
+				{
+					fieldname: "account_head",
+					label: __("Charge Account"),
+					fieldtype: "Link",
+					options: "Account",
+					reqd: 1,
+					get_query: account_query,
+					description: __("Only accounts for {0} are shown.", [company]),
+				},
+				{
+					fieldname: "amount",
+					label: __("Charge Amount"),
+					fieldtype: "Currency",
+					reqd: 1,
+				},
+				{ fieldname: "gst_section", fieldtype: "Section Break", label: __("GST on this charge") },
+				{
+					fieldname: "tax_type",
+					label: __("Tax Type"),
+					fieldtype: "Select",
+					options: "CGST + SGST\nIGST\nNo GST",
+					reqd: 1,
+				},
+				{
+					fieldname: "cgst_account",
+					label: __("CGST Account"),
+					fieldtype: "Link",
+					options: "Account",
+					get_query: account_query,
+					depends_on: 'eval:doc.tax_type=="CGST + SGST"',
+				},
+				{
+					fieldname: "cgst_rate",
+					label: __("CGST Rate %"),
+					fieldtype: "Float",
+					depends_on: 'eval:doc.tax_type=="CGST + SGST"',
+				},
+				{ fieldname: "gst_column", fieldtype: "Column Break", depends_on: 'eval:doc.tax_type=="CGST + SGST"' },
+				{
+					fieldname: "sgst_account",
+					label: __("SGST Account"),
+					fieldtype: "Link",
+					options: "Account",
+					get_query: account_query,
+					depends_on: 'eval:doc.tax_type=="CGST + SGST"',
+				},
+				{
+					fieldname: "sgst_rate",
+					label: __("SGST Rate %"),
+					fieldtype: "Float",
+					depends_on: 'eval:doc.tax_type=="CGST + SGST"',
+				},
+				{ fieldname: "igst_section", fieldtype: "Section Break", depends_on: 'eval:doc.tax_type=="IGST"' },
+				{
+					fieldname: "igst_account",
+					label: __("IGST Account"),
+					fieldtype: "Link",
+					options: "Account",
+					get_query: account_query,
+					depends_on: 'eval:doc.tax_type=="IGST"',
+				},
+				{
+					fieldname: "igst_rate",
+					label: __("IGST Rate %"),
+					fieldtype: "Float",
+					depends_on: 'eval:doc.tax_type=="IGST"',
+				},
+			],
+			primary_action_label: edit_group ? __("Update Charge") : __("Add Charge and GST"),
+			primary_action: (values) => {
+				const amount = flt(values.amount);
+				if (amount <= 0) {
+					frappe.msgprint({ message: __("Charge Amount must be greater than zero."), indicator: "orange" });
+					return;
+				}
+				if (values.tax_type === "CGST + SGST" && (
+					!values.cgst_account || !values.sgst_account || flt(values.cgst_rate) <= 0 || flt(values.sgst_rate) <= 0
+				)) {
+					frappe.msgprint({ message: __("Please select CGST/SGST accounts and enter both tax rates."), indicator: "orange" });
+					return;
+				}
+				if (values.tax_type === "IGST" && (!values.igst_account || flt(values.igst_rate) <= 0)) {
+					frappe.msgprint({ message: __("Please select IGST account and enter the tax rate."), indicator: "orange" });
+					return;
+				}
+
+				this.sync_form_data_from_controls();
+				const current_groups = this.get_purchase_charge_groups(table.rows || []);
+				const current_edit_group = edit_group
+					? current_groups.find((group) => group.base_index === edit_group.base_index) || edit_group
+					: null;
+				let rows = table.rows || [];
+				const reference_map = this.capture_purchase_tax_references(rows);
+				const taxable_charge_rows = new Set(
+					current_groups
+						.filter((group) => group.tax_indices.length)
+						.map((group) => rows[group.base_index])
+						.filter(Boolean)
+				);
+				const editing_row = current_edit_group ? rows[current_edit_group.base_index] : null;
+				if (editing_row) taxable_charge_rows.delete(editing_row);
+
+				const existing_gst_rows = rows.filter((row) => this.is_purchase_gst_tax_row(row));
+				const existing_kinds = new Set(existing_gst_rows.map((row) => this.purchase_charge_tax_kind(row)));
+				const existing_tax_type = existing_kinds.has("IGST")
+					? "IGST"
+					: existing_kinds.has("CGST") || existing_kinds.has("SGST") ? "CGST + SGST" : "";
+				if (values.tax_type !== "No GST" && existing_tax_type && existing_tax_type !== values.tax_type) {
+					frappe.msgprint({
+						title: __("GST Type Does Not Match"),
+						message: __(
+							"This Purchase Order tax template uses {0}. Select {0} for the additional charge, or change the Purchase Taxes and Charges Template first.",
+							[existing_tax_type]
+						),
+						indicator: "orange",
+					});
+					return;
+				}
+
+				const requested_specs = values.tax_type === "CGST + SGST"
+					? [
+						{ kind: "CGST", account_head: values.cgst_account, rate: flt(values.cgst_rate) },
+						{ kind: "SGST", account_head: values.sgst_account, rate: flt(values.sgst_rate) },
+					]
+					: values.tax_type === "IGST"
+						? [{ kind: "IGST", account_head: values.igst_account, rate: flt(values.igst_rate) }]
+						: [];
+				if (taxable_charge_rows.size && requested_specs.length) {
+					const conflicts = requested_specs.some((spec) => {
+						const existing = existing_gst_rows.find(
+							(row) => this.purchase_charge_tax_kind(row) === spec.kind
+						);
+						return existing && (
+							String(existing.account_head || "") !== String(spec.account_head || "")
+							|| flt(existing.rate) !== flt(spec.rate)
+						);
+					});
+					if (conflicts) {
+						frappe.msgprint({
+							title: __("Use the Same GST for Additional Charges"),
+							message: __("ERPNext India Compliance uses one common GST row set for taxable items and additional charges. Use the same GST accounts and rates already selected on this Purchase Order."),
+							indicator: "orange",
+						});
+						return;
+					}
+				}
+
+				const legacy_rows = new Set();
+				if (current_edit_group) {
+					current_edit_group.indices.slice(1).forEach((index) => {
+						if (rows[index]) legacy_rows.add(rows[index]);
+					});
+				}
+				if (legacy_rows.size) rows = rows.filter((row) => !legacy_rows.has(row));
+
+				const selected = presets.find((preset) => preset.label === values.charge_label);
+				const charge_label = selected ? selected.label : values.charge_label;
+				const charge_row = editing_row || {
+					_row_name: null,
+					category: "Total",
+					add_deduct_tax: "Add",
+					charge_type: "Actual",
+					row_id: "",
+				};
+				Object.assign(charge_row, {
+					category: "Total",
+					add_deduct_tax: "Add",
+					charge_type: "Actual",
+					row_id: "",
+					account_head: values.account_head,
+					description: charge_label,
+					rate: 0,
+					tax_amount: amount,
+				});
+				rows = rows.filter((row) => row !== charge_row);
+
+				if (requested_specs.length) {
+					taxable_charge_rows.add(charge_row);
+					const first_gst_index = rows.findIndex((row) => this.is_purchase_gst_tax_row(row));
+					const first_non_taxable_charge_index = rows.findIndex((row) => (
+						String(row.charge_type || "") === "Actual"
+						&& !this.is_purchase_gst_tax_row(row)
+						&& !taxable_charge_rows.has(row)
+					));
+					const insert_index = first_gst_index >= 0
+						? first_gst_index
+						: first_non_taxable_charge_index >= 0 ? first_non_taxable_charge_index : rows.length;
+					rows.splice(insert_index, 0, charge_row);
+				} else {
+					rows.push(charge_row);
+				}
+
+				this.restore_purchase_tax_references(rows, reference_map);
+				let gst_rows = rows.filter((row) => this.is_purchase_gst_tax_row(row));
+				if (requested_specs.length && !gst_rows.length) {
+					const new_gst_rows = requested_specs.map((spec) => ({
+						_row_name: null,
+						category: "Total",
+						add_deduct_tax: "Add",
+						charge_type: "On Previous Row Total",
+						row_id: "",
+						account_head: spec.account_head,
+						description: spec.kind,
+						rate: spec.rate,
+						tax_amount: 0,
+					}));
+					const charge_index = rows.indexOf(charge_row);
+					rows.splice(charge_index + 1, 0, ...new_gst_rows);
+					gst_rows = new_gst_rows;
+				}
+				if (requested_specs.length) {
+					requested_specs.forEach((spec) => {
+						const row = gst_rows.find((candidate) => this.purchase_charge_tax_kind(candidate) === spec.kind);
+						if (!row) return;
+						row.account_head = spec.account_head;
+						row.description = spec.kind;
+						row.rate = spec.rate;
+						row.tax_amount = 0;
+					});
+				}
+
+				const taxable_indices = [...taxable_charge_rows]
+					.map((row) => rows.indexOf(row))
+					.filter((index) => index >= 0);
+				if (taxable_indices.length) {
+					const reference_row_id = String(Math.max(...taxable_indices) + 1);
+					gst_rows.forEach((row) => {
+						row.charge_type = "On Previous Row Total";
+						row.row_id = reference_row_id;
+					});
+				} else {
+					gst_rows.forEach((row) => {
+						if (String(row.charge_type || "") !== "On Previous Row Total") return;
+						row.charge_type = "On Net Total";
+						row.row_id = "";
+					});
+				}
+				table.rows = rows;
+
+				dialog.hide();
+				this.suppress_po_tax_template_reload = true;
+				this.render_document_form(this.form_data);
+				frappe.show_alert({
+					message: edit_group ? __("Additional charge updated") : __("Additional charge added"),
+					indicator: "green",
+				});
+				setTimeout(() => this.recalculate_purchase_order_totals(), 250);
+				setTimeout(() => {
+					this.suppress_po_tax_template_reload = false;
+				}, 1500);
+			},
+		});
+		dialog.show();
+		dialog.set_value("charge_label", editing_charge.description || presets[0].label);
+		dialog.set_value("account_head", editing_charge.account_head || presets[0].account_head || "");
+		dialog.set_value("amount", edit_group ? flt(editing_charge.tax_amount) : 0);
+		dialog.set_value("tax_type", tax_defaults.tax_type);
+		dialog.set_value("cgst_account", tax_defaults.cgst_account);
+		dialog.set_value("sgst_account", tax_defaults.sgst_account);
+		dialog.set_value("igst_account", tax_defaults.igst_account);
+		dialog.set_value("cgst_rate", tax_defaults.cgst_rate);
+		dialog.set_value("sgst_rate", tax_defaults.sgst_rate);
+		dialog.set_value("igst_rate", tax_defaults.igst_rate);
+		if (!edit_group) set_default_account();
+	}
+
+	remove_purchase_charge(row_index) {
+		if (!this.form_data || this.form_data.key !== "purchase_order" || !this.form_data.can_save) return;
+		this.sync_form_data_from_controls();
+		const table = (this.form_data.tables || []).find((item) => item.fieldname === "taxes");
+		if (!table) return;
+		const rows = table.rows || [];
+		const groups = this.get_purchase_charge_groups(rows);
+		const group = groups.find((candidate) => candidate.base_index === row_index);
+		if (!group) return;
+
+		const target_row = rows[group.base_index];
+		const taxable_charge_rows = new Set(
+			groups
+				.filter((candidate) => candidate.tax_indices.length && candidate.base_index !== group.base_index)
+				.map((candidate) => rows[candidate.base_index])
+				.filter(Boolean)
+		);
+		const references = this.capture_purchase_tax_references(rows);
+		const removed_rows = new Set(group.indices.map((index) => rows[index]).filter(Boolean));
+		removed_rows.add(target_row);
+		table.rows = rows.filter((row) => !removed_rows.has(row));
+		this.restore_purchase_tax_references(table.rows, references);
+
+		const gst_rows = table.rows.filter((row) => this.is_purchase_gst_tax_row(row));
+		const taxable_indices = [...taxable_charge_rows]
+			.map((row) => table.rows.indexOf(row))
+			.filter((index) => index >= 0);
+		if (taxable_indices.length) {
+			const reference_row_id = String(Math.max(...taxable_indices) + 1);
+			gst_rows.forEach((row) => {
+				row.charge_type = "On Previous Row Total";
+				row.row_id = reference_row_id;
+			});
+		} else {
+			gst_rows.forEach((row) => {
+				if (String(row.charge_type || "") !== "On Previous Row Total") return;
+				row.charge_type = "On Net Total";
+				row.row_id = "";
+			});
+		}
+		this.render_document_form(this.form_data);
+		this.recalculate_purchase_order_totals();
+	}
+
 	remove_form_row(table_fieldname, row_index) {
 		if (!this.form_data || !this.form_data.can_save) return;
 		this.sync_form_data_from_controls();
 		const table = (this.form_data.tables || []).find((item) => item.fieldname === table_fieldname);
 		if (!table || row_index < 0 || row_index >= table.rows.length) return;
-		table.rows.splice(row_index, 1);
+		if (this.form_data.key === "purchase_order" && table_fieldname === "taxes") {
+			const removed_indices = new Set([row_index]);
+			let found_dependency = true;
+			while (found_dependency) {
+				found_dependency = false;
+				table.rows.forEach((row, index) => {
+					if (removed_indices.has(index)) return;
+					if (!["On Previous Row Amount", "On Previous Row Total"].includes(row.charge_type)) return;
+					const referenced_index = Number(row.row_id) - 1;
+					if (removed_indices.has(referenced_index)) {
+						removed_indices.add(index);
+						found_dependency = true;
+					}
+				});
+			}
+			const row_number_map = new Map();
+			let next_row_number = 1;
+			table.rows.forEach((row, index) => {
+				if (!removed_indices.has(index)) row_number_map.set(index + 1, next_row_number++);
+			});
+			table.rows = table.rows.filter((row, index) => !removed_indices.has(index));
+			table.rows.forEach((row) => {
+				if (["On Previous Row Amount", "On Previous Row Total"].includes(row.charge_type)) {
+					row.row_id = String(row_number_map.get(Number(row.row_id)) || row.row_id || "");
+				}
+			});
+		} else {
+			table.rows.splice(row_index, 1);
+		}
 		this.render_document_form(this.form_data);
 		if (this.form_data.key === "purchase_order" && ["items", "taxes"].includes(table_fieldname)) {
 			this.recalculate_purchase_order_totals();
@@ -2470,6 +3539,31 @@ class DuxProcurementPortal {
 		if (!this.form_data) return this.open_document_list(this.state.route_key);
 		if (this.form_data.name) this.open_document_detail(this.form_data.key, this.form_data.name);
 		else this.open_document_list(this.form_data.key);
+	}
+
+	async upload_queued_purchase_order_attachments(docname) {
+		if (!docname || !this.po_attachment_queue.length) return 0;
+		const pending = [...this.po_attachment_queue];
+		const failed = [];
+		let uploaded = 0;
+		for (const entry of pending) {
+			try {
+				await this.upload_purchase_order_attachment(entry.file, docname);
+				uploaded += 1;
+			} catch (error) {
+				failed.push(entry);
+			}
+		}
+		this.po_attachment_queue = failed;
+		this.refresh_purchase_order_attachment_queue();
+		if (failed.length) {
+			const error = new Error(
+				__("Purchase Order {0} was saved, but {1} attachment(s) could not be uploaded. Please retry Save Draft.", [docname, failed.length])
+			);
+			error.purchase_order_saved = true;
+			throw error;
+		}
+		return uploaded;
 	}
 
 	async save_portal_form(submit_after = false) {
@@ -2483,6 +3577,10 @@ class DuxProcurementPortal {
 				mapping_token: this.form_data.mapping_token || undefined,
 				values: JSON.stringify(this.collect_form_values()),
 			});
+			this.form_data.name = result.name;
+			this.form_data.is_new = false;
+			this.state.document_name = result.name;
+			const uploaded_attachments = await this.upload_queued_purchase_order_attachments(result.name);
 			if (submit_after) {
 				const submit_result = await this.call("dux_indent_master.portal.submit_portal_document", {
 					route_key: this.form_data.key,
@@ -2495,12 +3593,17 @@ class DuxProcurementPortal {
 				});
 				await this.open_document_detail(this.form_data.key, result.name);
 			} else {
-				frappe.show_alert({ message: `${result.name} ${__("saved")}`, indicator: "green" });
+				const attachment_message = uploaded_attachments
+					? ` · ${uploaded_attachments} ${__("attachment(s) uploaded")}` : "";
+				frappe.show_alert({ message: `${result.name} ${__("saved")}${attachment_message}`, indicator: "green" });
 				await this.open_document_detail(this.form_data.key, result.name);
 			}
 		} catch (error) {
 			const message = error && (error.message || error.exc) ? error.message || error.exc : __("Unable to save document.");
-			frappe.msgprint({ title: __("Save Failed"), message: this.escape(message), indicator: "red" });
+			frappe.msgprint({
+				title: error && error.purchase_order_saved ? __("Attachment Upload Failed") : __("Save Failed"),
+				message: this.escape(message), indicator: "red",
+			});
 			this.$content.find('[data-action="save-form"], [data-action="submit-form"]').prop("disabled", false);
 		} finally {
 			this.form_saving = false;
@@ -2706,7 +3809,8 @@ class DuxProcurementPortal {
 	}
 
 	show_loading() {
-		this.$content.removeClass("duxp-detail-view");
+		this.$content.removeClass("duxp-detail-view duxp-form-view duxp-list-view");
+		this.$content.closest(".duxp-scroll").removeClass("duxp-list-scroll-shell");
 		this.$content.html(`<div class="duxp-loading"><span></span><span></span><span></span><p>${__("Loading live data…")}</p></div>`);
 	}
 
@@ -2719,6 +3823,12 @@ class DuxProcurementPortal {
 		if (value === null || value === undefined || value === "") return '<span class="duxp-muted">—</span>';
 		if (["status", "row_status", "docstatus"].includes(column.fieldname)) return this.status_tag(value);
 		if (column.fieldname === "disabled") return this.status_tag(Number(value) ? __("Disabled") : __("Active"));
+		if (typeof value === "string" && column.fieldtype === "Text Editor") {
+			if (/address/i.test(column.fieldname || "")) {
+				return this.format_address_value(value) || '<span class="duxp-muted">—</span>';
+			}
+			return this.format_rich_text_value(value) || '<span class="duxp-muted">—</span>';
+		}
 		if (typeof value === "string" && /address/i.test(column.fieldname || "") && /<[^>]+>/.test(value)) {
 			return this.format_address_value(value);
 		}
@@ -2734,6 +3844,74 @@ class DuxProcurementPortal {
 				: this.escape(value);
 		}
 		return this.escape(value);
+	}
+
+	format_rich_text_value(value) {
+		const source = document.createElement("template");
+		source.innerHTML = String(value || "");
+		const output = document.createElement("div");
+		const allowed_tags = new Set([
+			"a", "b", "blockquote", "br", "del", "div", "em", "h1", "h2", "h3", "h4", "h5", "h6",
+			"hr", "i", "img", "li", "ol", "p", "s", "span", "strike", "strong", "sub", "sup",
+			"table", "tbody", "td", "tfoot", "th", "thead", "tr", "u", "ul",
+		]);
+		const blocked_tags = new Set(["audio", "embed", "form", "iframe", "object", "script", "style", "svg", "video"]);
+		const text_alignments = new Set(["left", "right", "center", "justify"]);
+
+		const clean_node = (node) => {
+			if (node.nodeType === 3) return document.createTextNode(node.nodeValue || "");
+			const fragment = document.createDocumentFragment();
+			if (node.nodeType !== 1) return fragment;
+
+			const tag = String(node.tagName || "").toLowerCase();
+			if (blocked_tags.has(tag)) return fragment;
+			const target = allowed_tags.has(tag) ? document.createElement(tag) : fragment;
+
+			if (target.nodeType === 1) {
+				if (["td", "th"].includes(tag)) {
+					["colspan", "rowspan"].forEach((attribute) => {
+						const count = Number.parseInt(node.getAttribute(attribute), 10);
+						if (count > 0 && count <= 100) target.setAttribute(attribute, String(count));
+					});
+				}
+				if (tag === "ol") {
+					const start = Number.parseInt(node.getAttribute("start"), 10);
+					if (Number.isFinite(start)) target.setAttribute("start", String(start));
+					const type = node.getAttribute("type") || "";
+					if (/^(1|a|A|i|I)$/.test(type)) target.setAttribute("type", type);
+				}
+				if (tag === "li") {
+					const item_value = Number.parseInt(node.getAttribute("value"), 10);
+					if (Number.isFinite(item_value)) target.setAttribute("value", String(item_value));
+				}
+				if (tag === "a") {
+					const href = this.safe_attachment_url(node.getAttribute("href") || "");
+					if (href) {
+						target.setAttribute("href", href);
+						target.setAttribute("target", "_blank");
+						target.setAttribute("rel", "noopener noreferrer");
+					}
+					const title = node.getAttribute("title");
+					if (title) target.setAttribute("title", title);
+				}
+				if (tag === "img") {
+					const src = this.safe_attachment_url(node.getAttribute("src") || "");
+					if (!src) return fragment;
+					target.setAttribute("src", src);
+					target.setAttribute("alt", node.getAttribute("alt") || "");
+					target.setAttribute("loading", "lazy");
+				}
+				const text_align = node.style && String(node.style.textAlign || "").toLowerCase();
+				if (text_alignments.has(text_align)) target.style.textAlign = text_align;
+			}
+
+			Array.from(node.childNodes || []).forEach((child) => target.appendChild(clean_node(child)));
+			return target;
+		};
+
+		Array.from(source.content.childNodes).forEach((node) => output.appendChild(clean_node(node)));
+		const html = output.innerHTML.trim();
+		return html ? `<div class="duxp-rich-text">${html}</div>` : "";
 	}
 
 	format_address_value(value) {
@@ -2795,8 +3973,8 @@ class DuxProcurementPortal {
 		return `<div class="duxp-card-header"><h3>${this.escape(title)}</h3><span>${this.escape(meta)}</span></div>`;
 	}
 
-	panel_header(index, title, meta) {
-		return `<div class="duxp-panel-header"><span>${String(index).padStart(2, "0")}</span><h3>${this.escape(title)}</h3><small>${this.escape(meta || "")}</small></div>`;
+	panel_header(index, title, meta, extra = "") {
+		return `<div class="duxp-panel-header"><span>${String(index).padStart(2, "0")}</span><h3>${this.escape(title)}</h3><small>${this.escape(meta || "")}</small>${extra}</div>`;
 	}
 
 	empty_state(title, description) {

@@ -1,6 +1,7 @@
 import json
 import secrets
 from collections import defaultdict
+from urllib.parse import urlencode
 
 import frappe
 from frappe import _
@@ -611,6 +612,36 @@ def on_delivery_challan_cancel(doc, method=None):
         _sync_delivery_challan_tracking(indent_name, ignore_links=True)
 
 
+def track_material_request_qty_changes(doc, method=None):
+    """Log every change to an Item row's qty into custom_activity_log --
+    who changed it, from what to what, and which approval stage it happened
+    at (the requester's own Draft edits, an L1 reviewer's edit while it sits
+    at Pending L1 Approval, or an L2 reviewer's edit at Pending L2 Approval).
+    Runs on every save; a brand-new document has no "before" state to diff."""
+    if doc.is_new():
+        return
+
+    before = doc.get_doc_before_save()
+    if not before:
+        return
+
+    before_items_by_row = {row.name: row for row in (before.get("items") or [])}
+    for row in doc.get("items") or []:
+        previous_row = before_items_by_row.get(row.name)
+        if not previous_row:
+            continue
+        if flt(previous_row.qty) == flt(row.qty):
+            continue
+        doc.append("custom_activity_log", {
+            "item_code": row.item_code,
+            "old_qty": previous_row.qty,
+            "new_qty": row.qty,
+            "changed_by": frappe.session.user,
+            "workflow_state_at_change": before.get("workflow_state"),
+            "changed_on": now(),
+        })
+
+
 def on_material_request_submit(doc, method=None):
     _apply_material_request_qty(doc, multiplier=1, status="Submitted")
 
@@ -1161,7 +1192,7 @@ def _validate_indent_open_for_transactions(indent):
         frappe.throw(_("This Dux Indent Master is closed. You cannot create new transactions."))
 
 
-def sync_all_delivery_challan_tracking():
+def sync_all_delivery_challan_tracking(ignore_links=False):
     indent_names = set(
         frappe.get_all(
             "Dux Indent Master",
@@ -1188,7 +1219,7 @@ def sync_all_delivery_challan_tracking():
         )
 
     for indent_name in sorted(filter(None, indent_names)):
-        _sync_delivery_challan_tracking(indent_name)
+        _sync_delivery_challan_tracking(indent_name, ignore_links=ignore_links)
 
 
 def _validate_delivery_challan_qty_limits(doc):
@@ -1767,6 +1798,10 @@ def _validate_delivery_source_stock(delivery_rows):
 PO_APPROVAL_TOKEN_TTL = 14 * 24 * 60 * 60  # 14 days
 PO_APPROVAL_EMAIL_TEMPLATE = "Po approval email"
 PO_APPROVAL_ROLE = "PO Approver"
+PO_APPROVAL_STAGES = {
+    "Pending Level 1": "Dharmendra PO Approver",
+    "Pending Level 2": PO_APPROVAL_ROLE,
+}
 
 
 def _get_po_department(doc):
@@ -1791,18 +1826,30 @@ def _get_po_item_summary(doc):
     return f"{names[0]}, {names[1]} +{len(names) - 2} more"
 
 
-def _create_po_approval_action_token(po_name, user, action):
+def _create_po_approval_action_token(po_name, user, action, workflow_state, approver_role):
     token = secrets.token_urlsafe(32)
     frappe.cache().set_value(
         f"po_approval_token:{token}",
-        frappe.as_json({"po_name": po_name, "user": user, "action": action}),
+        frappe.as_json(
+            {
+                "po_name": po_name,
+                "user": user,
+                "action": action,
+                "workflow_state": workflow_state,
+                "approver_role": approver_role,
+            }
+        ),
         expires_in_sec=PO_APPROVAL_TOKEN_TTL,
     )
     return token
 
 
-def send_po_approval_emails(doc):
-    """Email every PO Approver a personalised one-click Approve/Reject link."""
+def send_po_approval_emails(doc, workflow_state=None):
+    """Email only the approver role responsible for the current PO stage."""
+    workflow_state = workflow_state or doc.get("workflow_state")
+    approver_role = PO_APPROVAL_STAGES.get(workflow_state)
+    if not approver_role:
+        return
     if not frappe.db.exists("Email Template", PO_APPROVAL_EMAIL_TEMPLATE):
         frappe.log_error(
             title="PO approval email skipped",
@@ -1812,25 +1859,39 @@ def send_po_approval_emails(doc):
 
     approvers = frappe.get_all(
         "Has Role",
-        filters={"role": PO_APPROVAL_ROLE, "parenttype": "User"},
+        filters={"role": approver_role, "parenttype": "User"},
         pluck="parent",
     )
     if not approvers:
         return
 
-    active_users = set(
-        frappe.get_all(
-            "User",
-            filters={"name": ["in", approvers], "enabled": 1},
-            pluck="name",
+    active_users = []
+    seen_emails = set()
+    for user_row in frappe.get_all(
+        "User",
+        filters={"name": ["in", approvers], "enabled": 1},
+        fields=["name", "email"],
+        order_by="name asc",
+    ):
+        recipient_email = cstr(user_row.email or user_row.name).strip()
+        if not frappe.utils.validate_email_address(recipient_email, throw=False):
+            continue
+        normalized_email = recipient_email.lower()
+        if normalized_email in seen_emails:
+            continue
+        seen_emails.add(normalized_email)
+        active_users.append(
+            frappe._dict({"user": user_row.name, "email": recipient_email})
         )
-    )
     if not active_users:
         return
 
     template = frappe.get_doc("Email Template", PO_APPROVAL_EMAIL_TEMPLATE)
     base_url = frappe.utils.get_url()
-    view_url = f"{base_url}/app/purchase-order/{doc.name}"
+    view_query = urlencode(
+        {"route_key": "purchase_order", "document_name": doc.name}
+    )
+    view_url = f"{base_url}/app/dux-indent-portal?{view_query}"
 
     company_name = doc.company
     po_date = formatdate(doc.transaction_date, "dd-MM-yyyy") if doc.transaction_date else "-"
@@ -1842,11 +1903,17 @@ def send_po_approval_emails(doc):
     delivery_date = formatdate(doc.schedule_date, "dd-MM-yyyy") if doc.schedule_date else "-"
     total_amount = fmt_money(doc.grand_total or 0, currency=doc.currency, precision=2)
 
-    for user in active_users:
+    for approver in active_users:
+        user = approver.user
+        recipient_email = approver.email
         try:
             approver_name = frappe.db.get_value("User", user, "full_name") or user
-            approve_token = _create_po_approval_action_token(doc.name, user, "Approve")
-            reject_token = _create_po_approval_action_token(doc.name, user, "Reject")
+            approve_token = _create_po_approval_action_token(
+                doc.name, user, "Approve", workflow_state, approver_role
+            )
+            reject_token = _create_po_approval_action_token(
+                doc.name, user, "Reject", workflow_state, approver_role
+            )
             context = {
                 "COMPANY_NAME": company_name,
                 "APPROVER_NAME": approver_name,
@@ -1874,34 +1941,48 @@ def send_po_approval_emails(doc):
                 template.subject or "Purchase Order Approval Required: {{PO_NUMBER}}", context
             )
             frappe.sendmail(
-                recipients=[user],
+                recipients=[recipient_email],
                 subject=subject,
                 message=message,
                 reference_doctype=doc.doctype,
                 reference_name=doc.name,
-                now=True,
+                now=False,
             )
         except Exception:
             frappe.log_error(
                 title="PO approval email failed",
-                message=f"Could not email PO Approver {user} for {doc.name}.\n{frappe.get_traceback()}",
+                message=(
+                    f"Could not email {approver_role} user {user} for {doc.name}.\n"
+                    f"{frappe.get_traceback()}"
+                ),
             )
 
 
+def validate_purchase_order_rejection_remark(doc, method=None):
+    """Require a persisted remark whenever a PO transitions into Rejected."""
+    if cstr(doc.get("workflow_state")).strip() != "Rejected":
+        return
+    if not doc.has_value_changed("workflow_state"):
+        return
+    if not cstr(doc.get("custom_rejection_remark")).strip():
+        frappe.throw(_("Rejection Remark is required before rejecting this Purchase Order."))
+
+
 def on_purchase_order_workflow_state_change(doc, method=None):
-    """Send PO Approver notification emails the moment a PO enters Pending Approval.
+    """Notify only the role responsible when a PO enters an approval stage.
 
     Wrapped defensively: a notification failure must never block the actual
     workflow transition/save the user is performing.
     """
     try:
-        if doc.get("workflow_state") != "Pending Approval":
+        workflow_state = doc.get("workflow_state")
+        if workflow_state not in PO_APPROVAL_STAGES:
             return
         previous = doc.get_doc_before_save()
         previous_state = previous.get("workflow_state") if previous else None
-        if previous_state == "Pending Approval":
+        if previous_state == workflow_state:
             return
-        send_po_approval_emails(doc)
+        send_po_approval_emails(doc, workflow_state=workflow_state)
     except Exception:
         frappe.log_error(
             title="PO approval email trigger failed",
@@ -1936,25 +2017,26 @@ def _resolve_po_approval_token(token):
         return None
 
     po_name, user, action = data.get("po_name"), data.get("user"), data.get("action")
+    token_state = data.get("workflow_state")
+    token_role = data.get("approver_role")
     if not frappe.db.exists("Purchase Order", po_name):
         _po_approval_page("Not Found", "This Purchase Order no longer exists.", is_error=True)
         return None
 
-    if PO_APPROVAL_ROLE not in frappe.get_roles(user):
-        _po_approval_page(
-            "Not Authorized",
-            "This action is no longer available for this account.",
-            is_error=True,
-        )
-        return None
-
     doc = frappe.get_doc("Purchase Order", po_name)
-    if doc.get("workflow_state") != "Pending Approval":
+    current_state = doc.get("workflow_state")
+    required_role = PO_APPROVAL_STAGES.get(current_state)
+    if (
+        not required_role
+        or token_state != current_state
+        or token_role != required_role
+        or required_role not in frappe.get_roles(user)
+    ):
         frappe.cache().delete_value(cache_key)
         _po_approval_page(
             "Already Actioned",
-            f"Purchase Order {po_name} has already been "
-            f"{doc.get('workflow_state') or 'processed'}. No further action is needed.",
+            f"Purchase Order {po_name} is currently "
+            f"{current_state or 'processed'}. This approval link is no longer valid.",
         )
         return None
 
@@ -1984,12 +2066,12 @@ def handle_po_approval_action(token):
             padding:32px;border:1px solid #e2e8f0;border-radius:8px;">
             <h2 style="color:#dc2626;margin:0 0 12px;">Reject Purchase Order {frappe.utils.escape_html(doc.name)}</h2>
             <p style="color:#374151;font-size:14px;margin:0 0 16px;">
-                Please share a reason for rejecting this Purchase Order (optional).
+                Please share a reason for rejecting this Purchase Order.
             </p>
             <form method="POST" action="/api/method/dux_indent_master.api.submit_po_rejection">
                 <input type="hidden" name="token" value="{frappe.utils.escape_html(token)}">
                 <input type="hidden" name="csrf_token" value="{frappe.utils.escape_html(csrf_token)}">
-                <textarea name="remark" rows="4" placeholder="Reason for rejection"
+                <textarea name="remark" rows="4" placeholder="Reason for rejection" required
                     style="width:100%;font-family:inherit;font-size:13px;padding:8px;
                     border:1px solid #cbd5e1;border-radius:4px;box-sizing:border-box;"></textarea>
                 <button type="submit" style="margin-top:14px;background-color:#dc2626;
@@ -2039,17 +2121,19 @@ def submit_po_rejection(token, remark=None):
     from frappe.model.workflow import apply_workflow
 
     remark = cstr(remark).strip()
+    if not remark:
+        _po_approval_page("Remark Required", "Please enter a rejection remark before rejecting this Purchase Order.", is_error=True)
+        return
 
     try:
         # See the matching comment in handle_po_approval_action: the token +
         # role checks above already authorize this transition even for a
         # view-only portal approver with no real Frappe write permission.
         doc.flags.ignore_permissions = True
+        if not doc.meta.has_field("custom_rejection_remark"):
+            frappe.throw("Purchase Order rejection remark field is not configured.")
+        doc.set("custom_rejection_remark", remark)
         apply_workflow(doc, "Reject")
-        if remark and doc.meta.has_field("custom_rejection_remark"):
-            frappe.db.set_value(
-                doc.doctype, doc.name, "custom_rejection_remark", remark, update_modified=False
-            )
         frappe.db.commit()
     except Exception as e:
         frappe.db.rollback()

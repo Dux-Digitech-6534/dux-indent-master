@@ -16,13 +16,17 @@ override_doctype_class = {
     "Material Request": "dux_indent_master.overrides.material_request.CompanyOptionalMaterialRequest"
 }
 
+doctype_js = {"Purchase Order": "public/js/purchase_order_rejection_remark.js"}
+
 doc_events = {
     "Material Request": {
+        "validate": "dux_indent_master.api.track_material_request_qty_changes",
         "on_submit": "dux_indent_master.api.on_material_request_submit",
         "on_cancel": "dux_indent_master.api.on_material_request_cancel",
     },
     "Purchase Order": {
         "before_validate": "dux_indent_master.api.sync_material_request_company",
+        "validate": "dux_indent_master.api.validate_purchase_order_rejection_remark",
         "on_update": "dux_indent_master.api.on_purchase_order_workflow_state_change",
         "on_submit": "dux_indent_master.api.on_purchase_order_submit",
         "on_cancel": "dux_indent_master.api.on_purchase_order_cancel",
@@ -48,6 +52,8 @@ fixtures = [
                 "name",
                 "in",
                 [
+                    "Material Request-custom_activity_section",
+                    "Material Request-custom_activity_log",
                     "Material Request-custom_dux_indent_department",
                     "Material Request-custom_dux_indent_design_attachment",
                     "Material Request-custom_dux_indent_master",

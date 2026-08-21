@@ -159,7 +159,10 @@ def sync_dux_indent_delivery_tracking():
 
     from dux_indent_master.api import sync_all_delivery_challan_tracking
 
-    sync_all_delivery_challan_tracking()
+    # Historical indents can legitimately retain links to source documents
+    # that were removed later. Migration must refresh computed tracking fields
+    # without rewriting or fabricating those historical references.
+    sync_all_delivery_challan_tracking(ignore_links=True)
 
 
 def _ensure_custom_field(doctype, field):

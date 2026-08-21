@@ -143,7 +143,19 @@ DOCUMENT_CONFIG = {
                     _column("Warehouse", "warehouse"),
                     _column("Specification", "custom_dux_indent_specification", "description"),
                 ],
-            }
+            },
+            {
+                "fieldname": "custom_activity_log",
+                "label": "Activity",
+                "fields": [
+                    _column("Item", "item_code"),
+                    _column("Old Qty", "old_qty"),
+                    _column("New Qty", "new_qty"),
+                    _column("Changed By", "changed_by"),
+                    _column("Stage", "workflow_state_at_change"),
+                    _column("Changed On", "changed_on"),
+                ],
+            },
         ],
         "date_field": "transaction_date",
         "company_field": "company",
@@ -173,6 +185,7 @@ DOCUMENT_CONFIG = {
             _column("Currency", "currency"),
             _column("Grand Total", "grand_total"),
             _column("Status", "status"),
+            _column("Rejection Remark", "custom_rejection_remark"),
             _column("Project", "custom_site_project"),
             _column("Town", "custom_town"),
         ],
@@ -187,6 +200,18 @@ DOCUMENT_CONFIG = {
                     _column("Rate", "rate"),
                     _column("Amount", "amount"),
                     _column("Warehouse", "warehouse"),
+                ],
+                "detail_view_fields": [
+                    _column("Item", "item_code"),
+                    _column("Item Name", "item_name"),
+                    _column("Quantity", "qty"),
+                    _column("UOM", "uom"),
+                    _column("Rate", "rate"),
+                    _column("Amount", "amount"),
+                    _column("Warehouse", "warehouse"),
+                    _column("HSN/SAC", "gst_hsn_code"),
+                    _column("Item Tax Template", "item_tax_template"),
+                    _column("Description", "description"),
                 ],
             }
         ],
@@ -684,6 +709,7 @@ FORM_CONFIG = {
                 "field_overrides": {
                     "custom_sap_po_no": {"force_editable": True},
                     "custom_sap_remarks": {"force_editable": True},
+                    "custom_rejection_remark": {"include_hidden": True, "force_read_only": True},
                 },
             },
             {"label": "Taxes and Charges", "position": "after_tables", "order": 1, "fields": ["taxes_and_charges"]},
@@ -713,14 +739,22 @@ FORM_CONFIG = {
                     "amount",
                     "gst_hsn_code",
                     "item_tax_template",
+                    "warehouse",
                     "description",
                 ],
                 "field_overrides": {
                     "last_purchase_rate": {"force_read_only": True},
                     "amount": {"force_read_only": True},
+                    "warehouse": {"hide_in_form": True},
                 },
             },
-            {"fieldname": "taxes", "position": "after_tables", "order": 2, "fields": ["category", "add_deduct_tax", "charge_type", "account_head", "description", "rate", "tax_amount"]},
+            {
+                "fieldname": "taxes",
+                "position": "after_tables",
+                "order": 2,
+                "fields": ["category", "add_deduct_tax", "charge_type", "row_id", "account_head", "description", "rate", "tax_amount"],
+                "field_overrides": {"row_id": {"hide_in_form": True}},
+            },
             {
                 "fieldname": "payment_schedule",
                 "tab": "terms_conditions",
@@ -1043,6 +1077,9 @@ def get_dashboard(company=None):
         fields = ["name", "modified", "docstatus"]
         if _field_exists(meta, "status"):
             fields.append("status")
+        workflow_status_field = _get_workflow_status_config(config["doctype"])[0]
+        if workflow_status_field and workflow_status_field not in fields:
+            fields.append(workflow_status_field)
         date_field = config.get("date_field")
         if date_field and _field_exists(meta, date_field):
             fields.append(date_field)
@@ -1065,7 +1102,7 @@ def get_dashboard(company=None):
                     "name": row.name,
                     "date": row.get(date_field) if date_field else row.modified,
                     "modified": row.modified,
-                    "status": _display_status_value(row.get("status"), row.docstatus),
+                    "status": _portal_document_status(config["doctype"], row, row.get(workflow_status_field)),
                 }
             )
 
@@ -1074,7 +1111,7 @@ def get_dashboard(company=None):
     return {
         "kpis": [kpi for kpi in kpis if kpi],
         "recent": recent[:8],
-        "approvals": [] if scoped else _get_open_workflow_actions(),
+        "approvals": [] if scoped else _get_open_workflow_actions(company=company),
         "generated_on": nowdate(),
     }
 
@@ -1135,25 +1172,55 @@ def get_document_list(
     filters.update(get_restricted_indent_filters())
     _apply_company_filter(filters, doctype, company)
 
-    if status and status != "All" and status_field:
+    selected_statuses = []
+    if status:
+        if isinstance(status, str):
+            if status.lstrip().startswith("["):
+                try:
+                    parsed_status = frappe.parse_json(status)
+                except Exception:
+                    parsed_status = [status]
+            else:
+                parsed_status = [status]
+        else:
+            parsed_status = status if isinstance(status, (list, tuple, set)) else [status]
+        selected_statuses = _unique(
+            [cstr(option).strip() for option in parsed_status if cstr(option).strip() not in {"", "All"}]
+        )
+
+    status_filter_groups = []
+    if selected_statuses and status_field:
+        purchase_order_native_statuses = {"To Receive", "To Bill", "Completed", "Closed", "On Hold", "Cancelled"}
         if workflow_status_field:
             workflow_status_by_label = {
                 _display_workflow_state(option): option
                 for option in workflow_status_options
             }
-            workflow_status = workflow_status_by_label.get(status)
-            if not workflow_status and status in workflow_status_options:
-                workflow_status = status
-            if not workflow_status:
-                frappe.throw(_("Invalid workflow status filter."))
-            filters[status_field] = workflow_status
+            workflow_filters = []
+            native_filters = []
+            for selected_status in selected_statuses:
+                if doctype == "Purchase Order" and selected_status in purchase_order_native_statuses:
+                    native_filters.append(selected_status)
+                    continue
+                workflow_status = workflow_status_by_label.get(selected_status)
+                if not workflow_status and selected_status in workflow_status_options:
+                    workflow_status = selected_status
+                if not workflow_status:
+                    frappe.throw(_("Invalid workflow status filter."))
+                workflow_filters.append(workflow_status)
+            if workflow_filters:
+                status_filter_groups.append((workflow_status_field, _unique(workflow_filters)))
+            if native_filters and native_status_field:
+                status_filter_groups.append((native_status_field, _unique(native_filters)))
         elif status_field == "docstatus":
             docstatus_by_label = {"Draft": 0, "Submitted": 1, "Cancelled": 2}
-            if status not in docstatus_by_label:
+            try:
+                docstatus_filters = [docstatus_by_label[selected_status] for selected_status in selected_statuses]
+            except KeyError:
                 frappe.throw(_("Invalid status filter."))
-            filters[status_field] = docstatus_by_label[status]
+            status_filter_groups.append((status_field, _unique(docstatus_filters)))
         else:
-            filters[status_field] = status
+            status_filter_groups.append((status_field, selected_statuses))
 
     date_field = config.get("date_field")
     if date_field and _field_exists(meta, date_field):
@@ -1174,6 +1241,28 @@ def get_document_list(
             if _field_exists(meta, fieldname):
                 or_filters.append([doctype, fieldname, "like", f"%{search}%"])
 
+    if len(status_filter_groups) == 1:
+        status_filter_field, status_filter_values = status_filter_groups[0]
+        filters[status_filter_field] = ["in", status_filter_values]
+    elif len(status_filter_groups) > 1:
+        matching_names = []
+        for status_filter_field, status_filter_values in status_filter_groups:
+            group_filters = deepcopy(filters)
+            group_filters[status_filter_field] = ["in", status_filter_values]
+            matching_names.extend(
+                frappe.get_list(
+                    doctype,
+                    pluck="name",
+                    filters=group_filters,
+                    or_filters=or_filters,
+                    order_by="modified desc",
+                    limit_page_length=0,
+                )
+            )
+        filters["name"] = [
+            "in", _unique(matching_names) or ["__no_matching_document__"]
+        ]
+
     start = max(cint(start), 0)
     page_length = min(max(cint(page_length) or 20, 1), MAX_PAGE_LENGTH)
     rows = frappe.get_list(
@@ -1190,11 +1279,7 @@ def get_document_list(
             workflow_status = (
                 row.get(workflow_status_field) if workflow_status_field else None
             )
-            row.status = (
-                _display_workflow_state(workflow_status)
-                if workflow_status
-                else _display_status_value(row.get("status"), row.docstatus)
-            )
+            row.status = _portal_document_status(doctype, row, workflow_status)
     if any(column["fieldname"] == "docstatus" for column in columns):
         for row in rows:
             row.docstatus = _docstatus_label(row.docstatus)
@@ -1208,6 +1293,10 @@ def get_document_list(
         status_options = [
             _display_workflow_state(option) for option in workflow_status_options
         ]
+        if doctype == "Purchase Order":
+            status_options = _unique(
+                [*status_options, "To Receive", "To Bill", "Completed", "Closed", "On Hold", "Cancelled"]
+            )
     elif status_field == "docstatus":
         status_options = ["Draft", "Submitted", "Cancelled"]
     elif status_field:
@@ -1667,6 +1756,23 @@ def _get_document_activity(doc):
     }
 
 
+def _get_document_attachments(doc):
+    """Return lightweight attachment metadata for portal forms."""
+    if not doc or doc.is_new() or not doc.name:
+        return []
+
+    return frappe.get_all(
+        "File",
+        fields=["name", "file_name", "file_url", "is_private", "creation"],
+        filters={
+            "attached_to_doctype": doc.doctype,
+            "attached_to_name": doc.name,
+            "is_folder": 0,
+        },
+        order_by="creation asc",
+    )
+
+
 def _portal_route_for_doctype(doctype):
     """Return the portal route for a configured DocType, if it has a document view."""
     for route_key, config in DOCUMENT_CONFIG.items():
@@ -1809,7 +1915,7 @@ def _get_linked_documents(doc):
                 "doctype": entry["doctype"],
                 "route_key": entry["route_key"],
                 "name": entry["name"],
-                "status": _display_status_value(linked_doc.get("status"), linked_doc.docstatus),
+                "status": _portal_document_status(linked_doc.doctype, linked_doc),
                 "modified": linked_doc.modified,
                 "relations": sorted(entry["relations"]),
             }
@@ -1918,7 +2024,16 @@ def get_document_detail(route_key, name):
         child_columns = _resolve_columns(
             child_meta, table_config["fields"], allow_hidden=set(table_config.get("show_hidden") or [])
         )
+        # "detail_view_fields" is an optional, richer field list used only by the
+        # "View all" popup -- lets a compact/scrollable table on the document
+        # detail view coexist with a fuller per-row view, without changing what
+        # the compact table itself shows. Defaults to the same fields when unset.
+        detail_field_defs = table_config.get("detail_view_fields") or table_config["fields"]
+        detail_columns = _resolve_columns(
+            child_meta, detail_field_defs, allow_hidden=set(table_config.get("show_hidden") or [])
+        )
         child_rows = []
+        detail_rows = []
         for row in doc.get(table_config["fieldname"]) or []:
             row_values = {
                 column["fieldname"]: _resolve_display_value(column, row.get(column["fieldname"]))
@@ -1936,12 +2051,31 @@ def get_document_detail(route_key, name):
                 }
             )
 
+            detail_row_values = {
+                column["fieldname"]: _resolve_display_value(column, row.get(column["fieldname"]))
+                for column in detail_columns
+            }
+            detail_rows.append(
+                {
+                    "_row_name": row.name,
+                    **detail_row_values,
+                }
+            )
+
         child_columns = [
             column
             for column in child_columns
             if any(
                 _has_portal_display_value(row.get(column["fieldname"]))
                 for row in child_rows
+            )
+        ]
+        detail_columns = [
+            column
+            for column in detail_columns
+            if any(
+                _has_portal_display_value(row.get(column["fieldname"]))
+                for row in detail_rows
             )
         ]
 
@@ -1954,6 +2088,8 @@ def get_document_detail(route_key, name):
                 "doctype": table_field.options,
                 "columns": child_columns,
                 "rows": child_rows,
+                "detail_columns": detail_columns,
+                "detail_rows": detail_rows,
             }
         )
 
@@ -1980,11 +2116,7 @@ def get_document_detail(route_key, name):
         "name": doc.name,
         "label": _(config["label"]),
         "description": _(config["description"]),
-        "status": (
-            _display_workflow_state(workflow["state"])
-            if workflow["state"]
-            else _display_status_value(doc.get("status"), doc.docstatus)
-        ),
+        "status": _portal_document_status(doctype, doc, workflow["state"]),
         "docstatus": doc.docstatus,
         "fields": fields,
         "child_tables": child_tables,
@@ -2125,6 +2257,12 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
         for fieldname in table_config["fields"]:
             field_override = deepcopy(field_overrides.get(fieldname) or {})
             if (
+                route_key == "purchase_order"
+                and table_config["fieldname"] == "items"
+                and fieldname == "item_tax_template"
+            ):
+                field_override.setdefault("hide_in_form", True)
+            if (
                 fieldname in ("schedule_date", "required_date")
                 and meta.has_field(fieldname)
             ):
@@ -2176,9 +2314,14 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
         "description": _(config["description"]),
         "is_new": not bool(name),
         "docstatus": doc.docstatus,
-        "status": _display_status_value(doc.get("status"), doc.docstatus),
+        "status": _portal_document_status(doctype, doc, workflow["state"]),
         "sections": sections,
         "tables": tables,
+        "attachments": (
+            _get_document_attachments(doc)
+            if route_key == "purchase_order" and name
+            else []
+        ),
         "can_save": can_save,
         "can_update_after_submit": bool(submitted_update and can_save),
         "is_closed": bool(
@@ -2488,7 +2631,7 @@ def save_portal_document(route_key, values, name=None, mapping_token=None):
     return {
         "doctype": doctype,
         "name": doc.name,
-        "status": _display_status_value(doc.get("status"), doc.docstatus),
+        "status": _portal_document_status(doctype, doc, workflow["state"]),
         "docstatus": doc.docstatus,
         "can_submit": bool(submit_action),
         "submit_action": submit_action["action"] if submit_action else None,
@@ -2533,17 +2676,18 @@ def submit_portal_document(route_key, name, workflow_action=None):
     return {
         "doctype": doc.doctype,
         "name": doc.name,
-        "status": doc.get("workflow_state") or _display_status_value(doc.get("status"), doc.docstatus),
+        "status": _portal_document_status(doc.doctype, doc, doc.get("workflow_state")),
         "docstatus": doc.docstatus,
         "workflow_state": doc.get("workflow_state"),
     }
 
 
 @frappe.whitelist()
-def apply_portal_workflow_action(route_key, name, action):
+def apply_portal_workflow_action(route_key, name, action, remark=None):
     """Apply one native Frappe Workflow transition available to this user."""
     _require_authenticated_user()
     action = cstr(action).strip()
+    remark = cstr(remark).strip()
     if action not in ("Approve", "Reject"):
         deny_read_only_portal_write()
     require_restricted_route(route_key)
@@ -2557,6 +2701,15 @@ def apply_portal_workflow_action(route_key, name, action):
     available = {item["action"]: item for item in workflow["actions"]}
     if not workflow["name"] or action not in available:
         frappe.throw(_("This workflow action is not available."), frappe.PermissionError)
+    if doc.doctype == "Purchase Order" and action == "Reject":
+        if not remark:
+            frappe.throw(_("Rejection Remark is required."))
+        if not doc.meta.has_field("custom_rejection_remark"):
+            frappe.throw(_("Purchase Order rejection remark field is not configured."))
+        # apply_workflow reloads the document from the database before changing
+        # its state. Persist the remark so the rejection validation sees it.
+        # A failed request rolls this transaction back.
+        doc.db_set("custom_rejection_remark", remark, update_modified=False)
 
     from frappe.model.workflow import apply_workflow
 
@@ -2565,7 +2718,7 @@ def apply_portal_workflow_action(route_key, name, action):
     return {
         "doctype": doc.doctype,
         "name": doc.name,
-        "status": _display_status_value(doc.get("status"), doc.docstatus),
+        "status": _portal_document_status(doc.doctype, doc, doc.get("workflow_state")),
         "docstatus": doc.docstatus,
         "workflow_state": doc.get("workflow_state"),
     }
@@ -2618,7 +2771,7 @@ def update_portal_document_status(route_key, name, action, reason=None):
     return {
         "doctype": doc.doctype,
         "name": doc.name,
-        "status": _display_status_value(doc.get("status"), doc.docstatus),
+        "status": _portal_document_status(doc.doctype, doc),
         "docstatus": doc.docstatus,
     }
 
@@ -2642,7 +2795,7 @@ def cancel_portal_document(route_key, name):
     return {
         "doctype": doc.doctype,
         "name": doc.name,
-        "status": _display_status_value(doc.get("status"), doc.docstatus),
+        "status": _portal_document_status(doc.doctype, doc),
         "docstatus": doc.docstatus,
     }
 
@@ -2673,6 +2826,101 @@ def get_amended_document_form(route_key, name):
         can_save=True,
         mapping_token=token,
     )
+
+
+@frappe.whitelist()
+def get_purchase_order_company_refresh(company, taxes_and_charges=None):
+    """Resolve company-bound Purchase Order defaults after Company changes."""
+    _require_authenticated_user()
+    deny_restricted_non_indent_operation()
+    _require_doctype_permission("Purchase Order", "read")
+    company = cstr(company).strip()
+    if not company:
+        frappe.throw(_("Please select Company."))
+    if not frappe.get_list("Company", filters={"name": company}, pluck="name", limit_page_length=1):
+        frappe.throw(_("You do not have access to Company {0}.").format(company), frappe.PermissionError)
+
+    template_name = ""
+    taxes_and_charges = cstr(taxes_and_charges).strip()
+    if taxes_and_charges:
+        template_title = frappe.db.get_value(
+            "Purchase Taxes and Charges Template", taxes_and_charges, "title"
+        )
+        if template_title:
+            matches = frappe.get_list(
+                "Purchase Taxes and Charges Template",
+                filters={"company": company, "title": template_title, "disabled": 0},
+                pluck="name",
+                order_by="name asc",
+                limit_page_length=1,
+            )
+            template_name = matches[0] if matches else ""
+
+    return {
+        "company": company,
+        "taxes_and_charges": template_name,
+        "default_currency": frappe.get_cached_value("Company", company, "default_currency"),
+    }
+
+
+@frappe.whitelist()
+def get_portal_purchase_charge_options(company):
+    """Return simple charge presets and purchase-GST accounts for one Company."""
+    _require_authenticated_user()
+    deny_restricted_non_indent_operation()
+    _require_doctype_permission("Purchase Order", "read")
+    company = cstr(company).strip()
+    if not company:
+        frappe.throw(_("Please select Company before adding a charge."))
+
+    allowed_company = frappe.get_list(
+        "Company",
+        filters={"name": company},
+        pluck="name",
+        limit_page_length=1,
+    )
+    if not allowed_company:
+        frappe.throw(_("You do not have access to Company {0}.").format(company), frappe.PermissionError)
+
+    accounts = frappe.get_list(
+        "Account",
+        filters={"company": company, "is_group": 0, "disabled": 0},
+        fields=["name", "account_name"],
+        order_by="name asc",
+        limit_page_length=5000,
+    )
+
+    def find_account(token_groups, excluded_tokens=()):
+        for tokens in token_groups:
+            for account in accounts:
+                searchable = f"{cstr(account.account_name)} {cstr(account.name)}".lower()
+                if any(token in searchable for token in excluded_tokens):
+                    continue
+                if all(token in searchable for token in tokens):
+                    return account.name
+        return None
+
+    charge_presets = (
+        ("freight_forwarding", "Freight and Forwarding", (("freight", "forwarding"), ("freight",))),
+        ("loading_unloading", "Loading and Unloading", (("loading", "unloading"), ("loading",))),
+        ("labour_charges", "Labour Charges", (("labour", "charges"), ("labour",))),
+    )
+
+    return {
+        "charges": [
+            {
+                "key": key,
+                "label": _(label),
+                "account_head": find_account(token_groups),
+            }
+            for key, label, token_groups in charge_presets
+        ],
+        "gst_accounts": {
+            "cgst": find_account((("input", "tax", "cgst"),), ("rcm", "refund")),
+            "sgst": find_account((("input", "tax", "sgst"),), ("rcm", "refund")),
+            "igst": find_account((("input", "tax", "igst"),), ("rcm", "refund")),
+        },
+    }
 
 
 @frappe.whitelist()
@@ -2805,9 +3053,11 @@ def compute_purchase_order_totals(values):
             "taxes",
             {
                 "charge_type": row.get("charge_type"),
+                "row_id": row.get("row_id"),
                 "account_head": row.get("account_head"),
                 "description": row.get("description") or row.get("account_head"),
                 "rate": flt(row.get("rate")),
+                "tax_amount": flt(row.get("tax_amount")),
                 "category": row.get("category") or "Total",
                 "add_deduct_tax": row.get("add_deduct_tax") or "Add",
             },
@@ -3652,6 +3902,7 @@ def _serialize_form_field(
         "default": df.default,
         "description": _(df.description) if df.description else None,
         "min_date_field": field_override.get("min_date_field"),
+        "hide_in_form": bool(field_override.get("hide_in_form")),
         "value": value,
     }
 
@@ -4043,33 +4294,83 @@ def _dashboard_kpi(key, label, route_key, filters):
     }
 
 
-def _get_open_workflow_actions():
+def _get_open_workflow_actions(company=None):
     if not frappe.db.exists("DocType", "Workflow Action") or not _can_read_doctype("Workflow Action"):
         return []
 
     meta = frappe.get_meta("Workflow Action")
-    required_fields = ["reference_doctype", "reference_name", "status", "user", "modified"]
+    required_fields = ["reference_doctype", "reference_name", "status", "workflow_state", "modified"]
     if not all(_field_exists(meta, fieldname) for fieldname in required_fields):
         return []
 
+    roles = [role for role in frappe.get_roles(frappe.session.user) if role]
+    if not roles or not frappe.db.exists("DocType", "Workflow Action Permitted Role"):
+        return []
+
+    action_names = frappe.get_all(
+        "Workflow Action Permitted Role",
+        filters={"role": ["in", roles]},
+        pluck="parent",
+    )
+    if not action_names:
+        return []
+
+    portal_doctypes = list(
+        {
+            config["doctype"]
+            for route_key, config in DOCUMENT_CONFIG.items()
+            if route_key in FORM_CONFIG
+        }
+    )
     actions = frappe.get_list(
         "Workflow Action",
         fields=required_fields,
-        filters={"status": "Open", "user": frappe.session.user},
+        filters={
+            "name": ["in", list(set(action_names))],
+            "status": "Open",
+            "reference_doctype": ["in", portal_doctypes],
+        },
         order_by="modified desc",
-        limit_page_length=8,
+        limit_page_length=0,
     )
-    return [
-        {
-            "doctype": row.reference_doctype,
-            "name": row.reference_name,
-            "route_key": _portal_route_key_for_doctype(row.reference_doctype),
-            "status": row.status,
-            "modified": row.modified,
-        }
-        for row in actions
-        if row.reference_doctype and row.reference_name
-    ]
+    selected_company = cstr(company).strip()
+    result = []
+    for row in actions:
+        if not row.reference_doctype or not row.reference_name:
+            continue
+        route_key = _portal_route_key_for_doctype(row.reference_doctype)
+        if not route_key or not frappe.db.exists(row.reference_doctype, row.reference_name):
+            continue
+
+        doc = frappe.get_doc(row.reference_doctype, row.reference_name)
+        if not doc.has_permission("read"):
+            continue
+        if selected_company and selected_company != "All":
+            company_field = _get_company_filter_field(row.reference_doctype)
+            if company_field and cstr(doc.get(company_field)).strip() != selected_company:
+                continue
+
+        workflow = _get_portal_workflow_context(doc)
+        has_approval_action = any(
+            item["action"] in ("Approve", "Reject")
+            for item in workflow["actions"]
+        )
+        if not has_approval_action or (
+            row.workflow_state
+            and cstr(row.workflow_state).strip() != cstr(workflow["state"]).strip()
+        ):
+            continue
+
+        result.append(
+            {
+                "doctype": row.reference_doctype,
+                "name": row.reference_name,
+                "route_key": route_key,
+                "status": _display_workflow_state(workflow["state"]),
+                "modified": row.modified,
+            }
+        )
+    return result
 
 
 def _link_is_available(config):
@@ -4114,6 +4415,25 @@ def _display_workflow_state(state):
         "Pending L2 Approval": _("Pending Level 2"),
     }
     return labels.get(cstr(state).strip(), state)
+
+
+def _portal_document_status(doctype, record, workflow_state=None):
+    """Prefer workflow labels until a finally-approved PO enters its native ERP lifecycle."""
+    if not record:
+        return _docstatus_label(0)
+    if workflow_state is None:
+        workflow_field = _get_workflow_status_config(doctype)[0]
+        workflow_state = record.get(workflow_field) if workflow_field else None
+    workflow_state = cstr(workflow_state).strip()
+    native_status = _display_status_value(record.get("status"), record.get("docstatus"))
+    if doctype == "Purchase Order" and workflow_state == "Final Approved":
+        # Immediately after approval ERPNext says "To Receive and Bill". Keep the
+        # business-facing Final Approved label until receipt/invoice progress changes it.
+        if cstr(native_status).strip() not in ("Submitted", "To Receive and Bill"):
+            return native_status
+    if workflow_state:
+        return _display_workflow_state(workflow_state)
+    return native_status
 
 
 def _resolve_display_value(column, value):
