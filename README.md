@@ -29,8 +29,9 @@ the whole point: the APK is a pointer, the UI lives on the server.
 - ZERO server changes — the whole login is client-side in the APK.
 
 ## The deliverable
-- Signed release APK: `dist/Dux-Procurement-Portal-v1.0.5.apk` (also copied to Downloads)
-- Package id: `com.dux.indentportal`  ·  Version: 1.0.5 (versionCode 6)
+- Production release target: `dist/Dux-Procurement-Portal-v1.0.6.apk`
+  (must be built with the private release keystore described below)
+- Package id: `com.dux.indentportal`  ·  Version: 1.0.6 (versionCode 7)
 - Min Android 6.0 (SDK 23) · Targets Android 15 (SDK 35)
 - Android 15 forced edge-to-edge is opted out in the app theme, and
   `MainActivity` explicitly fits the WebView inside visible status/navigation bars.
@@ -38,6 +39,9 @@ the whole point: the APK is a pointer, the UI lives on the server.
   Verified on an Android 15 Pixel emulator.
 - The Android back button first navigates one step back in the portal WebView.
   It exits the activity only when the WebView has no previous page.
+- The portal's one-time Purchase Order PDF URL opens in the device browser, where
+  Android/Chrome downloads it. Direct WebView file responses use Android's native
+  Download Manager and are saved to the public Downloads folder.
 
 ## Install (sideload)
 Copy the APK to the phone → tap it → allow "Install unknown apps" for the file
