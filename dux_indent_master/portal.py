@@ -1562,6 +1562,21 @@ def _get_portal_workflow_context(doc):
     }
 
 
+def _reset_workflow_state_for_new_document(doc):
+    """Reset a copied document to the active Workflow's initial state."""
+    from frappe.model.workflow import get_workflow_name
+
+    workflow_name = get_workflow_name(doc.doctype)
+    if not workflow_name:
+        return
+
+    workflow = frappe.get_cached_doc("Workflow", workflow_name)
+    state_field = cstr(workflow.workflow_state_field).strip()
+    initial_state = workflow.states[0].state if workflow.states else None
+    if state_field and initial_state:
+        doc.set(state_field, initial_state)
+
+
 def _get_workflow_status_config(doctype):
     """Return the active workflow state field and its ordered states."""
     from frappe.model.workflow import get_workflow_name
@@ -2587,6 +2602,9 @@ def save_portal_document(route_key, values, name=None, mapping_token=None):
         doc = frappe.new_doc(doctype)
         is_new = True
 
+    if is_new and doc.get("amended_from"):
+        _reset_workflow_state_for_new_document(doc)
+
     previous_attachment_values = {
         fieldname: doc.get(fieldname)
         for fieldname in _restricted_attachment_fieldnames(doc)
@@ -2817,6 +2835,7 @@ def get_amended_document_form(route_key, name):
     amended_doc = frappe.copy_doc(doc, ignore_no_copy=True)
     amended_doc.docstatus = 0
     amended_doc.amended_from = doc.name
+    _reset_workflow_state_for_new_document(amended_doc)
     amended_doc.flags.ignore_permissions = False
     token = _store_mapped_document(route_key, amended_doc)
     return _serialize_document_form(
