@@ -88,6 +88,17 @@ DOCUMENT_MAPPINGS = {
             },
         },
     },
+    "delivery_challan": {
+        "purchase_receipt": {
+            "label": "Purchase Receipt",
+            "method": "dux_indent_master.api.make_delivery_challan_from_purchase_receipt",
+            "company_filter": True,
+            "filters": {
+                "docstatus": 1,
+                "is_return": 0,
+            },
+        },
+    },
 }
 
 
@@ -115,6 +126,7 @@ DOCUMENT_CONFIG = {
             _column("Material Request", "name"),
             _column("Transaction Date", "transaction_date"),
             _column("Required By", "schedule_date"),
+            _column("Project", "custom_site_project"),
             _column("Requested By", "custom_dux_indent_user", "owner"),
             _column("Status", "status"),
         ],
@@ -213,6 +225,7 @@ DOCUMENT_CONFIG = {
                     _column("Item Tax Template", "item_tax_template"),
                     _column("Description", "description"),
                 ],
+                "totals": ["qty", "amount"],
             }
         ],
         "date_field": "transaction_date",
@@ -705,7 +718,7 @@ FORM_CONFIG = {
         "sections": [
             {
                 "label": "Supplier & Schedule",
-                "fields": ["naming_series", "supplier", "transaction_date", "schedule_date", "company", "custom_site_project", "custom_town", "supplier_warehouse", "set_warehouse", "custom_sap_po_no", "custom_sap_remarks", "custom_rejection_remark"],
+                "fields": ["naming_series", "supplier", "transaction_date", "schedule_date", "company", "custom_site_project", "cost_center", "custom_town", "supplier_warehouse", "set_warehouse", "custom_sap_po_no", "custom_sap_remarks", "custom_rejection_remark"],
                 "field_overrides": {
                     "custom_sap_po_no": {"force_editable": True},
                     "custom_sap_remarks": {"force_editable": True},
@@ -1111,7 +1124,7 @@ def get_dashboard(company=None):
     return {
         "kpis": [kpi for kpi in kpis if kpi],
         "recent": recent[:8],
-        "approvals": [] if scoped else _get_open_workflow_actions(company=company),
+        "approvals": [] if scoped else _get_dashboard_pending_entries(company=company),
         "generated_on": nowdate(),
     }
 
@@ -1562,6 +1575,21 @@ def _get_portal_workflow_context(doc):
     }
 
 
+def _reset_workflow_state_for_new_document(doc):
+    """Reset a copied document to the active Workflow's initial state."""
+    from frappe.model.workflow import get_workflow_name
+
+    workflow_name = get_workflow_name(doc.doctype)
+    if not workflow_name:
+        return
+
+    workflow = frappe.get_cached_doc("Workflow", workflow_name)
+    state_field = cstr(workflow.workflow_state_field).strip()
+    initial_state = workflow.states[0].state if workflow.states else None
+    if state_field and initial_state:
+        doc.set(state_field, initial_state)
+
+
 def _get_workflow_status_config(doctype):
     """Return the active workflow state field and its ordered states."""
     from frappe.model.workflow import get_workflow_name
@@ -1937,6 +1965,69 @@ def _get_linked_documents(doc):
     return {"total": len(visible), "groups": groups}
 
 
+def _get_supplier_addresses(supplier_name):
+    """Return Address records linked to the Supplier currently being viewed."""
+    if not frappe.db.exists("DocType", "Address"):
+        return []
+
+    linked_names = frappe.get_all(
+        "Dynamic Link",
+        filters={
+            "parenttype": "Address",
+            "link_doctype": "Supplier",
+            "link_name": supplier_name,
+        },
+        pluck="parent",
+        limit_page_length=0,
+    )
+    supplier_meta = frappe.get_meta("Supplier")
+    if supplier_meta.has_field("supplier_primary_address"):
+        primary_address = frappe.db.get_value("Supplier", supplier_name, "supplier_primary_address")
+        if primary_address:
+            linked_names.insert(0, primary_address)
+    address_names = list(
+        dict.fromkeys(
+            cstr(address_name).strip()
+            for address_name in linked_names
+            if cstr(address_name).strip()
+        )
+    )
+    if not address_names:
+        return []
+
+    address_meta = frappe.get_meta("Address")
+    optional_fields = [
+        "address_title",
+        "address_type",
+        "address_line1",
+        "address_line2",
+        "city",
+        "state",
+        "pincode",
+        "country",
+        "email_id",
+        "phone",
+        "gstin",
+        "is_primary_address",
+        "is_shipping_address",
+    ]
+    fields = ["name"] + [fieldname for fieldname in optional_fields if address_meta.has_field(fieldname)]
+    addresses = frappe.get_all(
+        "Address",
+        filters={"name": ["in", address_names]},
+        fields=fields,
+        limit_page_length=0,
+    )
+    addresses.sort(
+        key=lambda address: (
+            -cint(address.get("is_primary_address")),
+            -cint(address.get("is_shipping_address")),
+            cstr(address.get("address_title") or address.get("name")).lower(),
+        )
+    )
+    return addresses
+
+
 @frappe.whitelist()
 def get_document_detail(route_key, name):
     _require_authenticated_user()
@@ -2081,6 +2172,19 @@ def get_document_detail(route_key, name):
 
         if not child_rows or not child_columns:
             continue
+
+        # "totals" is an optional list of fieldnames to sum across every child
+        # row -- rendered as a footer row below the compact table (e.g. Qty /
+        # Amount on Purchase Order Items). Only fieldnames whose column
+        # survived the empty-column filter above are included.
+        totals_fieldnames = set(table_config.get("totals") or [])
+        child_column_fieldnames = {column["fieldname"] for column in child_columns}
+        totals = {
+            fieldname: sum(flt(row.get(fieldname)) for row in doc.get(table_config["fieldname"]) or [])
+            for fieldname in totals_fieldnames
+            if fieldname in child_column_fieldnames
+        }
+
         child_tables.append(
             {
                 "fieldname": table_config["fieldname"],
@@ -2090,6 +2194,7 @@ def get_document_detail(route_key, name):
                 "rows": child_rows,
                 "detail_columns": detail_columns,
                 "detail_rows": detail_rows,
+                "totals": totals,
             }
         )
 
@@ -2120,6 +2225,7 @@ def get_document_detail(route_key, name):
         "docstatus": doc.docstatus,
         "fields": fields,
         "child_tables": child_tables,
+        "addresses": _get_supplier_addresses(doc.name) if route_key == "supplier" else [],
         "can_write": can_write,
         "can_edit": bool(doc.docstatus == 0 and can_write),
         "can_submit": bool(submit_action) and not read_only_user,
@@ -2587,6 +2693,9 @@ def save_portal_document(route_key, values, name=None, mapping_token=None):
         doc = frappe.new_doc(doctype)
         is_new = True
 
+    if is_new and doc.get("amended_from"):
+        _reset_workflow_state_for_new_document(doc)
+
     previous_attachment_values = {
         fieldname: doc.get(fieldname)
         for fieldname in _restricted_attachment_fieldnames(doc)
@@ -2600,6 +2709,8 @@ def save_portal_document(route_key, values, name=None, mapping_token=None):
         preserve_row_order=bool(mapping_token and not name),
         submitted_update=bool(name and doc.docstatus == 1),
     )
+    if route_key == "purchase_order":
+        _apply_purchase_order_cost_center(doc, values)
     if is_restricted_portal_user():
         if is_new:
             doc.owner = frappe.session.user
@@ -2817,6 +2928,7 @@ def get_amended_document_form(route_key, name):
     amended_doc = frappe.copy_doc(doc, ignore_no_copy=True)
     amended_doc.docstatus = 0
     amended_doc.amended_from = doc.name
+    _reset_workflow_state_for_new_document(amended_doc)
     amended_doc.flags.ignore_permissions = False
     token = _store_mapped_document(route_key, amended_doc)
     return _serialize_document_form(
@@ -3875,6 +3987,11 @@ def _serialize_form_field(
         fieldtype = df.fieldtype
 
     value = doc.get(fieldname) if doc else None
+    # Frappe's Time control accepts HH:mm:ss only. Python time/timedelta
+    # values can include microseconds (for example 11:45:15.841261), which
+    # makes the portal control emit one validation error on every re-render.
+    if df.fieldtype == "Time" and value not in (None, ""):
+        value = cstr(value).split(".", 1)[0]
     force_editable = bool(field_override.get("force_editable"))
     force_read_only = bool(field_override.get("force_read_only"))
     editable = bool(
@@ -4001,6 +4118,32 @@ def _apply_portal_form_values(
                 row_values.pop(internal, None)
             row_values.update(editable_values)
             doc.append(fieldname, row_values)
+
+
+def _apply_purchase_order_cost_center(doc, values):
+    """Apply the selected PO Cost Center to every accounting child row."""
+    if "cost_center" not in values:
+        return
+
+    cost_center = cstr(doc.get("cost_center")).strip()
+    if not cost_center:
+        return
+
+    company = cstr(doc.get("company")).strip()
+    cost_center_company = frappe.db.get_value("Cost Center", cost_center, "company")
+    if company and cost_center_company and cost_center_company != company:
+        frappe.throw(
+            _("Cost Center {0} does not belong to Company {1}.").format(
+                frappe.bold(cost_center), frappe.bold(company)
+            )
+        )
+
+    for table_df in doc.meta.fields:
+        if table_df.fieldtype != "Table":
+            continue
+        for row in doc.get(table_df.fieldname) or []:
+            if row.meta.has_field("cost_center"):
+                row.cost_center = cost_center
 
 
 def _prepare_portal_document(doc):
@@ -4368,8 +4511,69 @@ def _get_open_workflow_actions(company=None):
                 "route_key": route_key,
                 "status": _display_workflow_state(workflow["state"]),
                 "modified": row.modified,
+                "party": _dashboard_row_party(doc),
+                "amount": _dashboard_row_amount(doc),
+                "currency": doc.get("currency"),
             }
         )
+    return result
+
+
+def _dashboard_row_party(doc):
+    return (
+        doc.get("supplier_name")
+        or doc.get("supplier")
+        or doc.get("customer_name")
+        or doc.get("customer")
+        or ""
+    )
+
+
+def _dashboard_row_amount(doc):
+    return doc.get("grand_total")
+
+
+def _get_dashboard_pending_entries(company=None):
+    """Return actionable workflow rows plus draft Purchase Receipts and Invoices."""
+    result = _get_open_workflow_actions(company=company)
+    seen = {(row.get("doctype"), row.get("name")) for row in result}
+
+    for doctype in ("Purchase Receipt", "Purchase Invoice"):
+        if not _can_read_doctype(doctype):
+            continue
+        route_key = _portal_route_key_for_doctype(doctype)
+        if not route_key:
+            continue
+
+        filters = _apply_company_filter({"docstatus": 0}, doctype, company)
+        for row in frappe.get_list(
+            doctype,
+            fields=["name", "modified", "supplier_name", "supplier", "grand_total", "currency"],
+            filters=filters,
+            order_by="modified desc",
+            limit_page_length=0,
+        ):
+            key = (doctype, row.name)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(
+                {
+                    "doctype": doctype,
+                    "name": row.name,
+                    "route_key": route_key,
+                    "status": "Draft",
+                    "modified": row.modified,
+                    "party": _dashboard_row_party(row),
+                    "amount": _dashboard_row_amount(row),
+                    "currency": row.get("currency"),
+                }
+            )
+
+    result.sort(
+        key=lambda row: str(row.get("modified") or ""),
+        reverse=True,
+    )
     return result
 
 

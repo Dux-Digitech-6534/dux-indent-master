@@ -584,6 +584,47 @@ def create_delivery_challan_from_material_request(mr_name, selected_items=None, 
     return {"doctype": delivery_challan.doctype, "name": delivery_challan.name}
 
 
+def make_delivery_challan_from_purchase_receipt(source_name, target_doc=None, args=None):
+    """"Get Items From Purchase Receipt" mapper for the portal's New Delivery
+    Challan form -- unlike create_delivery_challan_from_material_request above
+    (which inserts a Delivery Challan immediately from an operational-action
+    dialog), this follows the same get_mapped_doc pattern as the portal's other
+    DOCUMENT_MAPPINGS entries: it only builds an *unsaved* Delivery Challan for
+    the user to review/edit before saving."""
+    from frappe.model.mapper import get_mapped_doc
+
+    def set_missing_values(source, target):
+        if not target.get("source_warehouse"):
+            warehouses = {row.warehouse for row in (source.get("items") or []) if row.warehouse}
+            if len(warehouses) == 1:
+                target.source_warehouse = warehouses.pop()
+
+    return get_mapped_doc(
+        "Purchase Receipt",
+        source_name,
+        {
+            "Purchase Receipt": {
+                "doctype": "Delivery Challan",
+                "field_map": {"company": "company"},
+                "validation": {"docstatus": ["=", 1]},
+            },
+            "Purchase Receipt Item": {
+                "doctype": "Delivery Challan Item",
+                "field_map": {
+                    "item_code": "item_code",
+                    "item_name": "item_name",
+                    "description": "description",
+                    "uom": "uom",
+                    "stock_uom": "stock_uom",
+                    "qty": "qty",
+                },
+            },
+        },
+        target_doc,
+        set_missing_values,
+    )
+
+
 def on_delivery_challan_validate(doc, method=None):
     _set_delivery_challan_item_quantities(doc)
     _validate_delivery_challan_qty_limits(doc)

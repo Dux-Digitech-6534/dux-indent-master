@@ -47,6 +47,7 @@ class DuxProcurementPortal {
 			start: 0,
 			search: "",
 			statuses: [],
+			approval_types: [],
 			from_date: "",
 			to_date: "",
 			activity_collapsed: false,
@@ -72,7 +73,10 @@ class DuxProcurementPortal {
 		try {
 			this.bootstrap = await this.call("dux_indent_master.portal.get_portal_bootstrap");
 			(this.bootstrap.menu || []).forEach((group) => {
-				(group.items || []).forEach((item) => (this.items[item.key] = item));
+				(group.items || []).forEach((item) => {
+					if (item.key === "purchase_receipt") item.label = __("Purchase Register (Receipt)");
+					this.items[item.key] = item;
+				});
 			});
 			this.apply_identity();
 			this.render_company_filter();
@@ -208,9 +212,35 @@ class DuxProcurementPortal {
 				this.state.start = 0;
 				this.open_document_list(this.state.route_key, true);
 			}
+			if (action === "toggle-approval-type-filter") {
+				event.stopPropagation();
+				const $filter = $target.closest(".duxp-approval-type-multiselect");
+				const should_open = !$filter.hasClass("is-open");
+				this.$root.find(".duxp-status-multiselect.is-open").removeClass("is-open");
+				$filter.toggleClass("is-open", should_open);
+			}
+			if (action === "apply-approval-type-filter") {
+				event.stopPropagation();
+				const $filter = $target.closest(".duxp-approval-type-multiselect");
+				this.state.approval_types = $filter.find('[data-role="approval-type-filter-option"]:checked')
+					.map((index, element) => String(element.value || "")).get().filter(Boolean);
+				$filter.removeClass("is-open");
+				this.filter_dashboard_approvals(this.state.approval_types);
+			}
+			if (action === "clear-approval-type-filter") {
+				event.stopPropagation();
+				const $filter = $target.closest(".duxp-approval-type-multiselect");
+				$filter.find('[data-role="approval-type-filter-option"]').prop("checked", false);
+				this.state.approval_types = [];
+				$filter.removeClass("is-open");
+				this.filter_dashboard_approvals([]);
+			}
 			if (action === "new") this.open_document_form($target.data("key"));
 			if (action === "back-list") this.open_document_list($target.data("key"));
 			if (action === "print-document") this.open_document_print($target.data("key"), $target.data("name"));
+			if (action === "download-pdf-external") {
+				this.open_document_pdf_external($target.data("key"), $target.data("name"));
+			}
 			if (action === "edit-form") this.open_document_form($target.data("key"), $target.data("name"));
 			if (action === "toggle-create-menu") {
 				event.stopPropagation();
@@ -218,9 +248,14 @@ class DuxProcurementPortal {
 			}
 			if (action === "create-mapped-document") {
 				this.$root.find(".duxp-dropdown.is-open").removeClass("is-open");
-				this.open_mapped_document_form(
-					$target.data("target-key"), $target.data("source-key"), $target.data("source-name")
-				);
+				if ($target.data("target-key") === "purchase_receipt"
+					&& $target.data("source-key") === "purchase_order") {
+					this.open_purchase_register_receipt($target.data("source-name"));
+				} else {
+					this.open_mapped_document_form(
+						$target.data("target-key"), $target.data("source-key"), $target.data("source-name")
+					);
+				}
 			}
 			if (action === "get-items-from") this.select_mapping_source(
 				$target.data("target-key"), $target.data("source-key")
@@ -270,7 +305,12 @@ class DuxProcurementPortal {
 
 		this.$root.on("click", "[data-route-key]", (event) => {
 			event.preventDefault();
-			this.navigate($(event.currentTarget).data("route-key"));
+			const route_key = $(event.currentTarget).data("route-key");
+			if (route_key === "purchase_receipt") {
+				this.open_purchase_register_receipt();
+				return;
+			}
+			this.navigate(route_key);
 		});
 
 		this.$root.on("click", ".duxp-document-row", (event) => {
@@ -307,10 +347,21 @@ class DuxProcurementPortal {
 		this.$root.on("input", '[data-role="list-search"]', (event) => {
 			clearTimeout(this.search_timer);
 			const value = event.currentTarget.value;
-			this.search_timer = setTimeout(() => {
+			const cursor_position = event.currentTarget.selectionStart;
+			this.search_timer = setTimeout(async () => {
 				this.state.search = value;
 				this.state.start = 0;
-				this.open_document_list(this.state.route_key, true);
+				await this.open_document_list(this.state.route_key, true);
+				// open_document_list() re-renders the whole list, which replaces
+				// this <input> with a fresh element and drops focus -- restore it
+				// (and the caret position) so search-as-you-type doesn't force the
+				// user to click back into the box after every pause.
+				const $input = this.$root.find('[data-role="list-search"]');
+				if ($input.length) {
+					$input[0].focus();
+					const pos = Math.min(cursor_position, $input.val().length);
+					$input[0].setSelectionRange(pos, pos);
+				}
 			}, 350);
 		});
 
@@ -491,6 +542,12 @@ class DuxProcurementPortal {
 		}
 	}
 
+	open_purchase_register_receipt(purchase_order = "") {
+		const params = new URLSearchParams({ view: "new" });
+		if (purchase_order) params.set("purchase_order", String(purchase_order));
+		window.location.assign("/desk/purchase-register-app?" + params.toString());
+	}
+
 	async load_report_filter_defs(report_name) {
 		if (frappe.query_reports[report_name] && frappe.query_reports[report_name].filters) {
 			return frappe.query_reports[report_name].filters;
@@ -607,7 +664,7 @@ class DuxProcurementPortal {
 		const rows = (data.rows || []).map((row) => `
 			<tr>${(data.columns || []).map((column) => {
 				const numeric = ["Currency", "Float", "Int", "Percent"].includes(column.fieldtype);
-				return `<td class="${numeric ? "duxp-report-number-cell" : ""}">${this.format_value(row[column.fieldname], column, row)}</td>`;
+				return `<td class="${numeric ? "duxp-report-number-cell" : ""}">${this.format_report_value(row[column.fieldname], column, row)}</td>`;
 			}).join("")}</tr>
 		`).join("");
 		const start = Number(data.start || 0);
@@ -615,6 +672,13 @@ class DuxProcurementPortal {
 		const can_previous = start > 0;
 		const can_next = end < Number(data.total || 0);
 		const range_label = `${data.total ? start + 1 : 0}–${end}`;
+
+		this.$content
+			.addClass("duxp-report-view")
+			.removeClass("duxp-detail-view duxp-form-view duxp-list-view");
+		this.$content.closest(".duxp-scroll")
+			.addClass("duxp-report-scroll-shell")
+			.removeClass("duxp-list-scroll-shell");
 
 		this.$content.html(`
 			<section class="duxp-report-hero">
@@ -692,6 +756,26 @@ class DuxProcurementPortal {
 			const user = this.bootstrap.user || {};
 			const hour = new Date().getHours();
 			const greeting = hour < 12 ? __("morning") : hour < 17 ? __("afternoon") : __("evening");
+			const approvals = data.approvals || [];
+			this.dashboard_approvals = approvals;
+			const approval_type_options = [
+				{ doctype: "Material Request", label: __("Material Request") },
+				{ doctype: "Purchase Order", label: __("Purchase Order (PO)") },
+				{ doctype: "Purchase Receipt", label: __("Purchase Receipt (PR)") },
+				{ doctype: "Purchase Invoice", label: __("Purchase Invoice (PI)") },
+			];
+			const selected_approval_types = Array.isArray(this.state.approval_types)
+				? this.state.approval_types
+				: [];
+			const selected_approval_type_labels = approval_type_options
+				.filter((option) => selected_approval_types.includes(option.doctype))
+				.map((option) => option.label);
+			const approval_type_summary = selected_approval_types.length === 0 ? __("All Types")
+				: selected_approval_types.length === 1 ? selected_approval_type_labels[0]
+				: `${selected_approval_types.length} ${__("selected")}`;
+			const filtered_approvals = selected_approval_types.length
+				? approvals.filter((row) => selected_approval_types.includes(row.doctype))
+				: approvals;
 			const kpis = (data.kpis || []).map((kpi, index) => `
 				<button class="duxp-card duxp-kpi" data-route-key="${this.escape(kpi.route_key)}">
 					<span class="duxp-kpi-icon duxp-kpi-${index % 4}">${this.icon(kpi.icon, 17)}</span>
@@ -706,13 +790,39 @@ class DuxProcurementPortal {
 				</section>
 				<section class="duxp-kpi-grid">${kpis}</section>
 				<section class="duxp-dashboard-grid">
-					<div class="duxp-card">
+					<div class="duxp-card duxp-recent-activity-card">
 						${this.card_header(__("Recent Activity"), __("latest documents"))}
 						${this.recent_table(data.recent || [])}
 					</div>
 					<div class="duxp-card duxp-pending-approvals-card">
-						${this.card_header(__("Pending Approvals"), `${(data.approvals || []).length} ${__("awaiting action")}`)}
-						${this.approval_list(data.approvals || [])}
+						<div class="duxp-card-header">
+							<h3>${this.escape(__("Pending Approvals"))}</h3>
+							<span data-pending-approval-count>${filtered_approvals.length} ${this.escape(__("awaiting action"))}</span>
+						</div>
+						<div class="duxp-approval-filter-bar">
+							<label>${this.escape(__("Pendency Type"))}</label>
+							<div class="duxp-status-multiselect duxp-approval-type-multiselect">
+								<button type="button" class="duxp-status-filter-trigger" data-action="toggle-approval-type-filter" title="${this.escape(selected_approval_type_labels.join(", ") || __("All Types"))}" aria-haspopup="true">
+									${this.icon("filter", 13)}<span data-approval-type-summary>${this.escape(approval_type_summary)}</span>${this.icon("chevron", 12)}
+								</button>
+								<div class="duxp-status-filter-menu">
+									<div class="duxp-status-filter-head">
+										<strong>${this.escape(__("Select Pendency Types"))}</strong>
+										<button type="button" data-action="clear-approval-type-filter">${this.escape(__("Show All"))}</button>
+									</div>
+									<div class="duxp-status-filter-options">
+										${approval_type_options.map((option) => `<label class="duxp-status-filter-option">
+											<input type="checkbox" data-role="approval-type-filter-option" value="${this.escape(option.doctype)}" ${selected_approval_types.includes(option.doctype) ? "checked" : ""}>
+											<span>${this.escape(option.label)}</span>
+										</label>`).join("")}
+									</div>
+									<button type="button" class="duxp-status-filter-apply" data-action="apply-approval-type-filter">${this.escape(__("Apply Filter"))}</button>
+								</div>
+							</div>
+						</div>
+						<div class="duxp-approval-list-host" data-pending-approval-list>
+							${this.approval_list(filtered_approvals)}
+						</div>
 					</div>
 				</section>
 			`);
@@ -864,6 +974,9 @@ class DuxProcurementPortal {
 		const source_activity = data.activity || {};
 		const detail_files = data.key === "purchase_order" ? (source_activity.attachments || []) : [];
 		const detail_attachments = this.render_document_attachment_previews(detail_files);
+		const supplier_addresses = data.key === "supplier"
+			? this.render_supplier_addresses(data.addresses, detail_panel_index++)
+			: "";
 		const tables = display_child_tables.map((table, table_index) => {
 			const table_panel_index = detail_panel_index++;
 			const selectable = data.key === "dux_indent_master" && table.fieldname === "items"
@@ -878,7 +991,7 @@ class DuxProcurementPortal {
 				${this.panel_header(table_panel_index, table.label, `${(table.rows || []).length} ${__("rows")}`, view_all_button)}
 				<div class="duxp-table-wrap duxp-child-detail-table-wrap"><table class="duxp-table duxp-child-detail-table"><thead><tr>${selectable ? `<th><input type="checkbox" data-role="indent-stock-all" aria-label="${__("Select all")}"></th>` : ""}<th>#</th>${(table.columns || []).map((column) => `<th>${this.escape(column.label)}</th>`).join("")}</tr></thead><tbody>
 					${(table.rows || []).map((row, index) => `<tr>${selectable ? `<td><input type="checkbox" data-role="indent-stock-row" value="${this.escape(row._row_name || "")}"></td>` : ""}<td class="duxp-index">${index + 1}</td>${table.columns.map((column) => `<td>${this.format_child_table_value(data, table, row, column)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${(table.columns || []).length + 1 + (selectable ? 1 : 0)}">${this.empty_state(__("No rows"), "")}</td></tr>`}
-				</tbody></table></div>
+				</tbody>${this.render_child_table_totals_row(table, selectable)}</table></div>
 			</section>
 			${table._purchase_charge_groups
 				? this.render_purchase_order_detail_charges(table._purchase_charge_groups, detail_panel_index++)
@@ -888,6 +1001,11 @@ class DuxProcurementPortal {
 		const DROPDOWN_OPERATIONAL_ACTIONS = ["indent_material_purchase", "indent_delivery_challan", "mr_delivery_challan"];
 		const dropdown_operational_actions = (data.operational_actions || [])
 			.filter((action) => DROPDOWN_OPERATIONAL_ACTIONS.includes(action.action));
+		(data.create_actions || []).forEach((action) => {
+			if (data.key === "purchase_order" && action.target_route_key === "purchase_receipt") {
+				action.label = __("Purchase Register (Receipt)");
+			}
+		});
 		const create_menu_items = [
 			...(data.create_actions || []).map((action) => `
 				<button class="duxp-menu-item" data-action="create-mapped-document"
@@ -942,6 +1060,9 @@ class DuxProcurementPortal {
 		const print_button = PORTAL_PRINT_FORMATS[data.key] ? `<button class="duxp-btn duxp-btn-secondary"
 			data-action="print-document" data-key="${this.escape(data.key)}" data-name="${this.escape(data.name)}">
 			${this.icon("print", 14)}${__("Print")}</button>` : "";
+		const download_pdf_button = data.key === "purchase_order" ? `<button class="duxp-btn duxp-btn-secondary"
+			data-action="download-pdf-external" data-key="${this.escape(data.key)}" data-name="${this.escape(data.name)}">
+			${this.icon("download", 14)}${__("Download PDF")}</button>` : "";
 		const submit_button = data.can_submit ? `<button class="duxp-btn duxp-btn-primary" data-action="submit-detail"
 			data-key="${this.escape(data.key)}" data-name="${this.escape(data.name)}"
 			data-workflow-action="${this.escape(data.submit_action || "")}">
@@ -960,6 +1081,7 @@ class DuxProcurementPortal {
 				<div class="duxp-head-actions">
 					<button class="duxp-btn duxp-btn-secondary" data-action="back-list" data-key="${this.escape(data.key)}">${this.icon("back", 14)}${__("Back to List")}</button>
 					${print_button}
+					${download_pdf_button}
 					${create_actions}
 					${operational_actions}
 					${workflow_actions}
@@ -975,6 +1097,7 @@ class DuxProcurementPortal {
 						<div class="duxp-detail-grid">${fields}</div>
 						${detail_attachments}
 					</section>
+					${supplier_addresses}
 					${tables}
 				</main>
 				<aside class="duxp-detail-sidebar">
@@ -984,6 +1107,56 @@ class DuxProcurementPortal {
 			</div>
 		`);
 		this.update_indent_stock_action_visibility();
+	}
+
+	render_supplier_addresses(addresses = [], panel_index = 2) {
+		const cards = addresses.map((address) => {
+			const locality = [address.city, address.state, address.pincode].filter(Boolean).join(", ");
+			const address_lines = [
+				address.address_line1,
+				address.address_line2,
+				locality,
+				address.country,
+			].filter(Boolean);
+			const badges = [
+				address.is_primary_address ? `<span class="duxp-address-badge is-primary">${__("Primary")}</span>` : "",
+				address.is_shipping_address ? `<span class="duxp-address-badge">${__("Shipping")}</span>` : "",
+			].join("");
+			const contact_rows = [
+				address.phone ? `<div><span>${__("Phone")}</span><strong>${this.escape(address.phone)}</strong></div>` : "",
+				address.email_id ? `<div><span>${__("Email")}</span><strong>${this.escape(address.email_id)}</strong></div>` : "",
+				address.gstin ? `<div><span>${__("GSTIN")}</span><strong>${this.escape(address.gstin)}</strong></div>` : "",
+			].join("");
+			return `
+				<article class="duxp-supplier-address-card">
+					<div class="duxp-supplier-address-head">
+						<div>
+							<strong>${this.escape(address.address_title || address.name || __("Address"))}</strong>
+							<span>${this.escape(address.address_type || __("Address"))}</span>
+						</div>
+						<div class="duxp-address-badges">${badges}</div>
+					</div>
+					<div class="duxp-supplier-address-lines">
+						${address_lines.length
+							? address_lines.map((line) => `<span>${this.escape(line)}</span>`).join("")
+							: `<span class="is-muted">${__("Address details not available")}</span>`}
+					</div>
+					${contact_rows ? `<div class="duxp-supplier-address-meta">${contact_rows}</div>` : ""}
+				</article>
+			`;
+		}).join("");
+		const content = cards || `
+			<div class="duxp-supplier-address-empty">
+				<strong>${__("No linked address")}</strong>
+				<span>${__("No Address record is linked to this Supplier in ERPNext.")}</span>
+			</div>`;
+		const count_label = addresses.length === 1 ? __("address") : __("addresses");
+		return `
+			<section class="duxp-card duxp-detail-panel">
+				${this.panel_header(panel_index, __("Supplier Addresses"), `${addresses.length} ${count_label}`)}
+				<div class="duxp-supplier-address-grid">${content}</div>
+			</section>
+		`;
 	}
 
 	render_document_attachment_previews(files = [], options = {}) {
@@ -1062,6 +1235,16 @@ class DuxProcurementPortal {
 			</button>`;
 		}
 		return this.format_value(value, column, row);
+	}
+
+	render_child_table_totals_row(table, selectable) {
+		const totals = table.totals || {};
+		if (!Object.keys(totals).length) return "";
+		const cells = (table.columns || []).map((column) => {
+			if (!(column.fieldname in totals)) return "<td></td>";
+			return `<td>${this.format_value(totals[column.fieldname], column)}</td>`;
+		}).join("");
+		return `<tfoot><tr class="duxp-child-detail-totals-row">${selectable ? "<td></td>" : ""}<td class="duxp-index">${this.escape(__("Total"))}</td>${cells}</tr></tfoot>`;
 	}
 
 	show_child_table_detail(table_index) {
@@ -1913,7 +2096,9 @@ class DuxProcurementPortal {
 		this.form_controls = {};
 		this.table_controls = {};
 		(data.tables || []).forEach((table) => {
-			if (table.reqd && !(table.rows || []).length && data.can_save) table.rows = [{}];
+			if (!this.is_mobile_form_table_layout() && table.reqd && !(table.rows || []).length && data.can_save) {
+				table.rows = [{}];
+			}
 		});
 
 		let panel_index = 1;
@@ -2203,6 +2388,30 @@ class DuxProcurementPortal {
 		`;
 	}
 
+	control_change_signature(value) {
+		if (value === null || value === undefined) return "";
+		if (typeof value === "object") {
+			try {
+				return JSON.stringify(value);
+			} catch (error) {
+				return String(value);
+			}
+		}
+		return String(value);
+	}
+
+	bind_control_change(control, callback) {
+		if (!control) return;
+		control.duxp_last_change_signature = this.control_change_signature(control.get_value());
+		control.df.change = () => {
+			const value = control.get_value();
+			const signature = this.control_change_signature(value);
+			if (signature === control.duxp_last_change_signature) return;
+			control.duxp_last_change_signature = signature;
+			return callback(value);
+		};
+	}
+
 	mount_form_controls() {
 		(this.form_data.sections || []).forEach((section) => {
 			(section.fields || []).forEach((field) => {
@@ -2210,7 +2419,7 @@ class DuxProcurementPortal {
 				const control = this.make_form_control($slot, field, field.value, false);
 				this.form_controls[field.fieldname] = control;
 				if (control && this.form_data.can_save) {
-					control.df.change = () => this.handle_parent_control_change(field.fieldname, control.get_value());
+					this.bind_control_change(control, (value) => this.handle_parent_control_change(field.fieldname, value));
 				}
 				if (control) this.refresh_indent_attachment_preview(field.fieldname);
 			});
@@ -2225,12 +2434,12 @@ class DuxProcurementPortal {
 					const control = this.make_form_control($slot, field, row[field.fieldname], true);
 					row_controls[field.fieldname] = control;
 					if (control && this.form_data.can_save) {
-						control.df.change = () => this.handle_table_control_change(
+						this.bind_control_change(control, (value) => this.handle_table_control_change(
 							table.fieldname,
 							row_index,
 							field,
-							control.get_value()
-						);
+							value
+						));
 					}
 				});
 				this.table_controls[table.fieldname].push(row_controls);
@@ -2457,11 +2666,11 @@ class DuxProcurementPortal {
 		this.refresh_indent_attachment_preview(fieldname);
 		// Controls are recreated whenever a child row is added or removed. Frappe's
 		// initial set_value can emit an asynchronous change after the handler is
-		// attached, so do not treat the already-rendered tax template as a user
-		// selection. Otherwise adding a manual tax row immediately reloads the
-		// template and replaces the table with its original rows.
+		// attached, so do not treat an already-rendered value as a user selection.
+		// This also prevents Company refresh from rendering the form and triggering
+		// itself again in a loop.
         if (this.form_data && this.form_data.key === "purchase_order"
-            && ["taxes_and_charges", "payment_terms_template"].includes(fieldname)) {
+            && ["company", "taxes_and_charges", "payment_terms_template"].includes(fieldname)) {
             if (fieldname === "taxes_and_charges" && this.suppress_po_tax_template_reload) return;
 			const rendered_field = (this.form_data.sections || [])
 				.flatMap((section) => section.fields || [])
@@ -2474,6 +2683,11 @@ class DuxProcurementPortal {
 			await this.open_delivery_challan_receipt(value);
 			return;
 		}
+		if (this.form_data && this.form_data.key === "purchase_receipt"
+			&& this.form_data.is_new && fieldname === "purchase_order" && value) {
+			await this.open_mapped_document_form("purchase_receipt", "purchase_order", value);
+			return;
+		}
 		if (this.form_data && this.form_data.key === "item" && fieldname === "item_code" && value) {
 			const item_name_control = this.form_controls.item_name;
 			if (item_name_control && !item_name_control.get_value()) {
@@ -2482,9 +2696,6 @@ class DuxProcurementPortal {
 		}
 		if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "supplier" && value) {
 			await this.fetch_supplier_party_details(value);
-		}
-		if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "company") {
-			await this.refresh_purchase_order_company_context(value);
 		}
         if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "payment_terms_template" && value) {
             await this.apply_purchase_order_payment_terms_template(value);
@@ -3055,11 +3266,11 @@ class DuxProcurementPortal {
 		});
 	}
 
-	add_form_row(table_fieldname) {
-		if (!this.form_data || !this.form_data.can_save) return;
-		this.sync_form_data_from_controls();
-		const table = (this.form_data.tables || []).find((item) => item.fieldname === table_fieldname);
-		if (!table) return;
+	is_mobile_form_table_layout() {
+		return Boolean(window.matchMedia && window.matchMedia("(max-width: 620px)").matches);
+	}
+
+	new_form_table_row(table) {
 		const row = {};
 		["schedule_date", "required_date"].forEach((fieldname) => {
 			if ((table.fields || []).some((field) => field.fieldname === fieldname)
@@ -3067,7 +3278,151 @@ class DuxProcurementPortal {
 				row[fieldname] = this.form_controls[fieldname].get_value() || "";
 			}
 		});
+		return row;
+	}
+
+	mobile_form_row_dialog_field(field) {
+		const df = {
+			...field,
+			label: field.label,
+			read_only: field.read_only || !this.form_data.can_save ? 1 : 0,
+		};
+		if (["Link", "Dynamic Link"].includes(df.fieldtype)) df.ignore_link_validation = true;
+		if (df.fieldtype === "Dynamic Link") {
+			df.get_options = () => {
+				const option_control = this.form_controls[df.options];
+				return option_control ? option_control.get_value() : "";
+			};
+		}
+		if (
+			df.fieldtype === "Link"
+			&& df.options === "Site Project"
+			&& this.bootstrap.restricted_indent_access
+		) {
+			df.get_query = () => ({ query: "dux_indent_master.portal.get_portal_site_options" });
+		} else if (df.fieldtype === "Link" && df.options === "Purchase Taxes and Charges Template") {
+			df.get_query = () => ({
+				filters: {
+					company: this.form_company_value() || ["in", []],
+					disabled: 0,
+				},
+			});
+		} else if (
+			df.fieldtype === "Link"
+			&& ["Warehouse", "Account", "Cost Center", "Project", "Town At Project"].includes(df.options)
+		) {
+			df.get_query = () => ({ filters: this.link_filters(df.options) });
+		}
+		return df;
+	}
+
+	form_table_initial_value(field, value) {
+		if (
+			(value === null || value === undefined || value === "")
+			&& this.form_data.is_new
+			&& field.default !== null
+			&& field.default !== undefined
+			&& field.default !== ""
+		) return field.default;
+		return value === null || value === undefined ? "" : value;
+	}
+
+	open_mobile_form_row_dialog(table_fieldname) {
+		if (!this.form_data || !this.form_data.can_save) return;
+		this.sync_form_data_from_controls();
+		const table = (this.form_data.tables || []).find((item) => item.fieldname === table_fieldname);
+		if (!table) return;
+		const visible_fields = (table.fields || []).filter((field) => !field.hide_in_form);
+		if (!visible_fields.length) return;
+
+		const row = this.new_form_table_row(table);
+		const row_index = table.rows.length;
 		table.rows.push(row);
+		let committed = false;
+		let disposed = false;
+		let saving = false;
+		const dialog = new frappe.ui.Dialog({
+			title: __("Add {0}", [table.label || __("Row")]),
+			fields: visible_fields.map((field) => this.mobile_form_row_dialog_field(field)),
+			primary_action_label: __("Add Row"),
+			primary_action: async () => {
+				if (saving) return;
+				saving = true;
+				const $primary = dialog.get_primary_btn();
+				$primary.prop("disabled", true);
+				try {
+					const item_control = dialog.fields_dict.item_code;
+					if (item_control && item_control.get_value()) {
+						await this.apply_item_defaults(table_fieldname, row_index, item_control.get_value());
+					}
+					const values = dialog.get_values();
+					if (!values) return;
+					visible_fields.forEach((field) => {
+						const control = dialog.fields_dict[field.fieldname];
+						if (control) row[field.fieldname] = control.get_value();
+					});
+					committed = true;
+					dialog.hide();
+					this.render_document_form(this.form_data);
+					frappe.show_alert({ message: __("Row added"), indicator: "green" });
+					if (this.form_data.key === "purchase_order" && ["items", "taxes"].includes(table_fieldname)) {
+						setTimeout(() => this.recalculate_purchase_order_totals(), 250);
+					}
+				} finally {
+					saving = false;
+					if (!committed) $primary.prop("disabled", false);
+				}
+			},
+		});
+
+		const row_controls = {};
+		visible_fields.forEach((field) => {
+			const control = dialog.fields_dict[field.fieldname];
+			if (!control) return;
+			control.duxp_field = field;
+			control.duxp_base_read_only = Boolean(control.df.read_only);
+			control.duxp_base_reqd = Boolean(control.df.reqd);
+			control.set_value(this.form_table_initial_value(field, row[field.fieldname]));
+			row_controls[field.fieldname] = control;
+		});
+		this.table_controls[table.fieldname] = this.table_controls[table.fieldname] || [];
+		this.table_controls[table.fieldname].push(row_controls);
+		visible_fields.forEach((field) => {
+			const control = row_controls[field.fieldname];
+			if (!control) return;
+			this.bind_control_change(control, (value) => this.handle_table_control_change(
+				table.fieldname,
+				row_index,
+				field,
+				value
+			));
+		});
+
+		dialog.$wrapper.addClass("duxp-mobile-row-dialog");
+		dialog.$wrapper.on("hidden.bs.modal", () => {
+			if (committed || disposed) return;
+			disposed = true;
+			const current_index = table.rows.indexOf(row);
+			if (current_index >= 0) table.rows.splice(current_index, 1);
+			const controls = this.table_controls[table.fieldname] || [];
+			const control_index = controls.indexOf(row_controls);
+			if (control_index >= 0) controls.splice(control_index, 1);
+			this.refresh_form_dependencies();
+		});
+		dialog.show();
+		this.refresh_form_dependencies();
+	}
+
+	add_form_row(table_fieldname) {
+		if (!this.form_data || !this.form_data.can_save) return;
+		if (this.is_mobile_form_table_layout()) {
+			this.open_mobile_form_row_dialog(table_fieldname);
+			return;
+		}
+		this.sync_form_data_from_controls();
+		const table = (this.form_data.tables || []).find((item) => item.fieldname === table_fieldname);
+		if (!table) return;
+		table.rows.push(this.new_form_table_row(table));
 		this.render_document_form(this.form_data);
 	}
 
@@ -3725,13 +4080,54 @@ class DuxProcurementPortal {
 		`).join("")}</tbody></table></div>`;
 	}
 
+	filter_dashboard_approvals(doctypes = []) {
+		const approvals = this.dashboard_approvals || [];
+		const selected = Array.isArray(doctypes) ? doctypes.filter(Boolean) : [];
+		this.state.approval_types = selected;
+		const filtered = selected.length
+			? approvals.filter((row) => selected.includes(row.doctype))
+			: approvals;
+		const $list = this.$root.find("[data-pending-approval-list]");
+		if (!$list.length) return;
+		$list.html(this.approval_list(filtered));
+		this.$root.find("[data-pending-approval-count]").text(
+			`${filtered.length} ${__("awaiting action")}`
+		);
+		const labels = {
+			"Material Request": __("Material Request"),
+			"Purchase Order": __("Purchase Order (PO)"),
+			"Purchase Receipt": __("Purchase Receipt (PR)"),
+			"Purchase Invoice": __("Purchase Invoice (PI)"),
+		};
+		const summary = selected.length === 0 ? __("All Types")
+			: selected.length === 1 ? labels[selected[0]] || selected[0]
+			: `${selected.length} ${__("selected")}`;
+		this.$root.find("[data-approval-type-summary]").text(summary);
+		this.$root.find('[data-action="toggle-approval-type-filter"]')
+			.attr("title", selected.map((doctype) => labels[doctype] || doctype).join(", ") || __("All Types"));
+	}
+
 	approval_list(rows) {
 		if (!rows.length) return this.empty_state(__("No pending approvals"), __("You are all caught up."));
-		return `<div class="duxp-approval-list">${rows.map((row) => `
-			<button class="duxp-approval-item duxp-approval-row" data-key="${this.escape(row.route_key || "")}" data-doctype="${this.escape(row.doctype)}" data-name="${this.escape(row.name)}">
-				<span class="duxp-approval-icon">${this.icon("check", 15)}</span><span><strong>${this.escape(row.name)}</strong><small>${this.escape(row.doctype)} · ${this.format_date(row.modified)}</small></span>${this.status_tag(row.status)}
-			</button>
-		`).join("")}</div>`;
+		// Cap the visible rows so this card never needs its own scrollbar --
+		// same "top N, no in-card scroll" pattern as the Recent Activity card.
+		// The header count badge still reflects the true, uncapped total.
+		const visible_rows = rows.slice(0, 8);
+		return `<div class="duxp-approval-table-wrap"><table class="duxp-table duxp-approval-table">
+			<thead><tr><th>${__("ID")}</th><th>${__("Name")}</th><th>${__("Amount")}</th><th>${__("Status")}</th></tr></thead>
+			<tbody>${visible_rows.map((row) => {
+				const amount_html = (row.amount !== undefined && row.amount !== null && Number(row.amount) !== 0)
+					? `<span class="duxp-number">${this.escape(format_currency(flt(row.amount), row.currency || frappe.defaults.get_default("currency") || "INR"))}</span>`
+					: `<span class="duxp-muted">—</span>`;
+				return `
+				<tr class="duxp-approval-row" data-key="${this.escape(row.route_key || "")}" data-doctype="${this.escape(row.doctype)}" data-name="${this.escape(row.name)}">
+					<td><strong class="duxp-id-cell">${this.escape(row.name)}</strong><small>${this.escape(row.doctype)} · ${this.format_date(row.modified)}</small></td>
+					<td>${row.party ? this.escape(row.party) : `<span class="duxp-muted">—</span>`}</td>
+					<td>${amount_html}</td>
+					<td>${this.status_tag(row.status)}</td>
+				</tr>
+			`;}).join("")}</tbody>
+		</table></div>`;
 	}
 
 	change_page(direction) {
@@ -3778,7 +4174,91 @@ class DuxProcurementPortal {
 			no_letterhead: "1",
 			_lang: frappe.boot.lang || "en",
 		});
-		window.open(`/printview?${params.toString()}`, "_blank", "noopener,noreferrer");
+		const print_url = `/printview?${params.toString()}`;
+		const user_agent = navigator.userAgent || "";
+		const is_android = /Android/i.test(user_agent);
+
+		// Android WebView wrappers commonly block target=_blank/window.open.
+		// Reusing the current WebView keeps the Print action functional and lets
+		// the device Back button return to the Purchase Order.
+		if (is_android) {
+			window.location.assign(print_url);
+			return;
+		}
+
+		const popup = window.open(print_url, "_blank", "noopener,noreferrer");
+		if (!popup) window.location.assign(print_url);
+	}
+
+	get_document_pdf_download_url(key, name) {
+		const format = PORTAL_PRINT_FORMATS[key];
+		const item = this.items[key];
+		if (!name || !format || !item) return "";
+		const params = new URLSearchParams({
+			doctype: item.doctype,
+			name: String(name),
+			print_format: format,
+			no_letterhead: "1",
+			language: frappe.boot.lang || "en",
+			disposition: "attachment",
+		});
+		return `/api/method/dux_indent_master.mobile_pdf.download_document_pdf?${params.toString()}`;
+	}
+	open_document_pdf_external(key, name) {
+		const format = PORTAL_PRINT_FORMATS[key];
+		const item = this.items[key];
+		if (!name || !format || !item) return;
+
+		try {
+			// Create the short-lived URL while the WebView session is authenticated.
+			// A synchronous request keeps this code inside the user's click gesture,
+			// so target=_blank can still be handed to the device browser afterwards.
+			const params = new URLSearchParams({
+				doctype: item.doctype,
+				name: String(name),
+				print_format: format,
+				no_letterhead: "1",
+				language: frappe.boot.lang || "en",
+				disposition: "attachment",
+			});
+			const endpoint = `/api/method/dux_indent_master.mobile_pdf.create_mobile_pdf_download?${params.toString()}`;
+			const request = new XMLHttpRequest();
+			request.open("GET", endpoint, false);
+			request.setRequestHeader("Accept", "application/json");
+			request.send(null);
+			if (request.status < 200 || request.status >= 300) {
+				throw new Error(__("Unable to prepare PDF download."));
+			}
+
+			const response = JSON.parse(request.responseText || "{}");
+			const public_url = response && response.message && response.message.url;
+			if (!public_url) throw new Error(__("PDF download link was not returned."));
+
+			// Keep this as a normal HTTPS navigation. Android WebView wrappers can send
+			// target=_blank links to the device browser, while intent:// links fail in
+			// wrappers that do not implement custom URI-scheme handling.
+			const download_url = new URL(public_url, window.location.origin).href;
+			// Cordova-style wrappers understand _system as the external browser.
+			// Plain WebViews fall back to a real target=_blank HTTPS link below.
+			const external_window = window.open(download_url, "_system");
+			if (external_window) return;
+
+			const link = document.createElement("a");
+			link.href = download_url;
+			link.target = "_blank";
+			link.rel = "noopener noreferrer external";
+			link.setAttribute("data-open-external", "true");
+			link.style.display = "none";
+			document.body.appendChild(link);
+			link.click();
+			link.remove();
+		} catch (error) {
+			frappe.msgprint({
+				title: __("PDF Download Failed"),
+				message: error && error.message ? error.message : __("Unable to prepare PDF download."),
+				indicator: "red",
+			});
+		}
 	}
 
 	toggle_theme() {
@@ -3809,14 +4289,37 @@ class DuxProcurementPortal {
 	}
 
 	show_loading() {
-		this.$content.removeClass("duxp-detail-view duxp-form-view duxp-list-view");
-		this.$content.closest(".duxp-scroll").removeClass("duxp-list-scroll-shell");
+		this.$content.removeClass("duxp-detail-view duxp-form-view duxp-list-view duxp-report-view");
+		this.$content.closest(".duxp-scroll").removeClass("duxp-list-scroll-shell duxp-report-scroll-shell");
 		this.$content.html(`<div class="duxp-loading"><span></span><span></span><span></span><p>${__("Loading live data…")}</p></div>`);
 	}
 
 	show_error(error) {
 		const message = error && (error.message || error.exc) ? error.message || error.exc : __("Unable to load portal data.");
 		this.$content.html(`<div class="duxp-card duxp-error-state">${this.icon("warning", 28)}<h2>${__("Something went wrong")}</h2><p>${this.escape(message)}</p><button class="duxp-btn duxp-btn-primary" data-action="refresh">${__("Try Again")}</button></div>`);
+	}
+
+	format_report_value(value, column, row) {
+		if (typeof value === "string") {
+			const source = String(value);
+			const contains_markup = /<\/?[a-z][^>]*>/i.test(source);
+			const contains_entity = /&(?:amp|lt|gt|quot|apos|nbsp|#\d+|#x[\da-f]+);/i.test(source);
+			if (contains_markup || contains_entity) {
+				const normalized = source
+					.replace(/<br\s*\/?>/gi, "\n")
+					.replace(/<li(?:\s[^>]*)?>/gi, " • ")
+					.replace(/<\/(?:p|div|li|tr|h[1-6])>/gi, "\n")
+					.replace(/<[^>]+>/g, "");
+				const decoder = document.createElement("textarea");
+				decoder.innerHTML = normalized;
+				const plain_text = decoder.value
+					.replace(/\u00a0/g, " ")
+					.replace(/\s+/g, " ")
+					.trim();
+				return plain_text ? this.escape(plain_text) : '<span class="duxp-muted">—</span>';
+			}
+		}
+		return this.format_value(value, column, row);
 	}
 
 	format_value(value, column) {
