@@ -65,9 +65,12 @@ fixtures = [
                     "Material Request Item-custom_dux_indent_specification",
                     "Delivery Challan-custom_dux_indent_master",
                     "Delivery Challan-custom_dux_indent_required_date",
+                    "Delivery Challan-custom_delivery_party",
                     "Delivery Challan Item-custom_delivery_challan_qty",
                     "Delivery Challan Item-custom_dux_indent_item",
                     "Delivery Challan Item-custom_dux_indent_specification",
+                    "Sales Invoice-custom_delivery_challan",
+                    "Sales Invoice Item-custom_delivery_challan_item",
                 ],
             ]
         ],

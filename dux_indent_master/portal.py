@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from copy import deepcopy
 
@@ -96,6 +97,17 @@ DOCUMENT_MAPPINGS = {
             "filters": {
                 "docstatus": 1,
                 "is_return": 0,
+            },
+        },
+    },
+    "sales_invoice": {
+        "delivery_challan": {
+            "label": "Delivery Challan",
+            "method": "dux_indent_master.api.make_sales_invoice_from_delivery_challan",
+            "company_filter": True,
+            "filters": {
+                "docstatus": 1,
+                "movement_category": "Sales",
             },
         },
     },
@@ -320,6 +332,50 @@ DOCUMENT_CONFIG = {
         "company_field": "company",
         "search_fields": ["name", "supplier", "bill_no"],
     },
+    "sales_invoice": {
+        "label": "Sales Invoice",
+        "doctype": "Sales Invoice",
+        "icon": "rupee",
+        "description": "Customer invoices and sales accounting.",
+        "columns": [
+            _column("Sales Invoice", "name"),
+            _column("Customer", "customer"),
+            _column("Posting Date", "posting_date"),
+            _column("Due Date", "due_date"),
+            _column("Grand Total", "grand_total"),
+            _column("Outstanding", "outstanding_amount"),
+            _column("Status", "status"),
+        ],
+        "detail_fields": [
+            _column("Sales Invoice", "name"),
+            _column("Customer", "customer"),
+            _column("Posting Date", "posting_date"),
+            _column("Due Date", "due_date"),
+            _column("Company", "company"),
+            _column("Currency", "currency"),
+            _column("Delivery Challan", "custom_delivery_challan"),
+            _column("Grand Total", "grand_total"),
+            _column("Outstanding", "outstanding_amount"),
+            _column("Status", "status"),
+        ],
+        "child_tables": [
+            {
+                "fieldname": "items",
+                "label": "Items",
+                "fields": [
+                    _column("Item", "item_code"),
+                    _column("Item Name", "item_name"),
+                    _column("Quantity", "qty"),
+                    _column("UOM", "uom"),
+                    _column("Rate", "rate"),
+                    _column("Amount", "amount"),
+                ],
+            }
+        ],
+        "date_field": "posting_date",
+        "company_field": "company",
+        "search_fields": ["name", "customer", "custom_delivery_challan"],
+    },
     "stock_entry": {
         "label": "Stock Entry",
         "doctype": "Stock Entry",
@@ -409,6 +465,7 @@ DOCUMENT_CONFIG = {
         "description": "Dispatch challans for controlled material movement.",
         "columns": [
             _column("Delivery Challan", "name"),
+            _column("Category", "movement_category"),
             _column("Project / Site", "project"),
             _column("Dispatch Date", "posting_date"),
             _column("Source Warehouse", "source_warehouse"),
@@ -417,12 +474,13 @@ DOCUMENT_CONFIG = {
         ],
         "detail_fields": [
             _column("Delivery Challan", "name"),
+            _column("Category", "movement_category"),
             _column("Company", "company"),
             _column("Posting Date", "posting_date"),
             _column("Project / Site", "project"),
             _column("Source Warehouse", "source_warehouse"),
             _column("Target Warehouse", "target_warehouse"),
-            _column("Transit Warehouse", "transit_warehouse"),
+            _column("Party", "custom_delivery_party"),
             _column("Vehicle Number", "vehicle_no"),
             _column("Driver Name", "driver_name"),
             _column("Material Indent", "custom_dux_indent_master"),
@@ -606,6 +664,8 @@ DOCUMENT_CONFIG = {
             _column("Item Group", "item_group"),
             _column("Stock UOM", "stock_uom"),
             _column("Valuation Rate", "valuation_rate"),
+            _column("Has Variants", "has_variants"),
+            _column("Variant Of", "variant_of"),
             _column("Disabled", "disabled"),
         ],
         "detail_fields": [
@@ -617,8 +677,20 @@ DOCUMENT_CONFIG = {
             _column("Valuation Rate", "valuation_rate"),
             _column("Default Material Request Type", "default_material_request_type"),
             _column("Brand", "brand"),
+            _column("Has Variants", "has_variants"),
+            _column("Variant Of", "variant_of"),
             _column("Disabled", "disabled"),
             _column("Description", "description"),
+        ],
+        "child_tables": [
+            {
+                "fieldname": "attributes",
+                "label": "Attributes",
+                "fields": [
+                    _column("Attribute", "attribute"),
+                    _column("Attribute Value", "attribute_value"),
+                ],
+            }
         ],
         "date_field": "creation",
         "search_fields": ["name", "item_name", "item_group"],
@@ -727,8 +799,9 @@ FORM_CONFIG = {
             },
             {"label": "Taxes and Charges", "position": "after_tables", "order": 1, "fields": ["taxes_and_charges"]},
             {"label": "Totals", "position": "after_tables", "order": 3, "fields": ["grand_total", "in_words", "rounding_adjustment", "rounded_total", "advance_paid"]},
-            {"label": "Supplier Address, Billing & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "billing_address", "billing_address_display", "contact_person", "contact_display", "contact_mobile", "contact_email", "place_of_supply"]},
-            {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display", "ship_to_address"]},
+            {"label": "Supplier Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["supplier_address", "address_display", "supplier_gstin", "gst_category", "contact_person", "contact_display", "contact_mobile", "contact_email"]},
+            {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["dispatch_address", "dispatch_address_display", "shipping_address", "shipping_address_display"]},
+            {"label": "Company Billing Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["billing_address", "billing_address_display", "company_gstin", "place_of_supply"]},
             {"label": "Payment Terms", "tab": "terms_conditions", "tab_label": "Terms & Conditions", "fields": ["payment_terms_template"]},
             {
                 "label": "Terms & Conditions",
@@ -800,6 +873,16 @@ FORM_CONFIG = {
             {"fieldname": "items", "fields": ["item_code", "item_name", "qty", "uom", "conversion_factor", "rate", "expense_account", "purchase_order", "purchase_receipt", "description"]},
         ],
     },
+    "sales_invoice": {
+        "sections": [
+            {"label": "Customer & Posting", "fields": ["naming_series", "customer", "posting_date", "posting_time", "set_posting_time", "due_date", "company", "cost_center", "project", "custom_delivery_challan"]},
+            {"label": "Customer Address & Contact", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["customer_address", "address_display", "contact_person", "contact_display", "contact_mobile", "contact_email"]},
+            {"label": "Shipping Address", "tab": "address_contact", "tab_label": "Address & Contact", "fields": ["shipping_address_name", "shipping_address"]},
+        ],
+        "tables": [
+            {"fieldname": "items", "fields": ["item_code", "item_name", "qty", "uom", "rate", "amount", "description"]},
+        ],
+    },
     "stock_entry": {
         "sections": [
             {"label": "Stock Movement", "fields": ["naming_series", "stock_entry_type", "company", "posting_date", "posting_time", "set_posting_time"]},
@@ -826,7 +909,7 @@ FORM_CONFIG = {
     },
     "delivery_challan": {
         "sections": [
-            {"label": "Delivery Details", "fields": ["company", "posting_date", "source_warehouse", "transit_warehouse", "target_warehouse", "project", "cost_center", "remarks"]},
+            {"label": "Delivery Details", "fields": ["movement_category", "company", "posting_date", "source_warehouse", "target_warehouse", "custom_delivery_party", "project", "cost_center", "remarks"]},
             {"label": "Indent Reference", "fields": ["custom_dux_indent_master", "custom_dux_indent_required_date"]},
             {"label": "Transport", "fields": ["vehicle_no", "driver_name", "driver_mobile", "transporter", "lr_no", "custom_no_of_pages", "custom_transport_gst_no", "custom_mode_of_dispatch", "dispatch_from_address", "dispatch_to_address"]},
             {"label": "Dispatch & Receipt Tracking", "fields": ["dispatch_stock_entry", "dispatched_by", "dispatch_datetime", "receipt_stock_entries", "received_by", "receipt_datetime", "shortage_stock_entry", "shortage_closure_type", "shortage_reason"]},
@@ -888,11 +971,20 @@ FORM_CONFIG = {
                     "valuation_rate",
                 ],
             },
+            {
+                "label": "Variants",
+                "fields": ["has_variants", "variant_of"],
+            },
         ],
         "tables": [
             {
                 "fieldname": "taxes",
                 "fields": ["item_tax_template"],
+            },
+            {
+                "fieldname": "attributes",
+                "fields": ["attribute", "attribute_value"],
+                "field_overrides": {"attribute_value": {"force_read_only": True}},
             },
         ],
     },
@@ -925,6 +1017,7 @@ MENU_GROUPS = [
             "purchase_order",
             "purchase_receipt",
             "purchase_invoice",
+            "sales_invoice",
             "stock_entry",
             "payment_entry",
             "delivery_challan",
@@ -1429,6 +1522,8 @@ def _source_is_available(source_route_key, doc):
             and status != "Stopped"
             and flt(doc.get("per_ordered")) < 100
         )
+    if source_route_key == "delivery_challan":
+        return doc.get("movement_category") == "Sales"
     if source_route_key == "purchase_order":
         return status not in ("Closed", "On Hold")
     if source_route_key == "purchase_receipt":
@@ -1694,9 +1789,10 @@ def _document_operational_actions(route_key, doc):
     can_write = frappe.has_permission(doc.doctype, ptype="write", doc=doc)
 
     if route_key == "delivery_challan":
+        is_transfer_category = doc.get("movement_category") in ("Material", "Store to Store")
         if doc.docstatus == 0 and can_write:
             actions.append({"action": "dc_add_material", "label": _("Add Material"), "style": "secondary"})
-        if doc.docstatus == 1 and status == "Pending Dispatch" and can_write:
+        if doc.docstatus == 1 and status == "Pending Dispatch" and can_write and is_transfer_category:
             actions.append({"action": "dc_dispatch", "label": _("Dispatch Material"), "style": "primary"})
         if (
             doc.docstatus == 1
@@ -1728,6 +1824,14 @@ def _document_operational_actions(route_key, doc):
             and frappe.has_permission("Delivery Challan", ptype="create")
         ):
             actions.append({"action": "mr_delivery_challan", "label": _("Delivery Challan"), "style": "primary"})
+
+    if route_key == "item":
+        if (
+            doc.get("has_variants")
+            and not doc.get("variant_of")
+            and frappe.has_permission("Item", ptype="create")
+        ):
+            actions.append({"action": "item_create_variants", "label": _("Create Variants"), "style": "primary"})
 
     return actions
 
@@ -2316,6 +2420,12 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
         field_overrides = section.get("field_overrides") or {}
         fields = []
         for fieldname in section["fields"]:
+            if (
+                route_key == "delivery_challan"
+                and fieldname in ("custom_dux_indent_master", "custom_dux_indent_required_date", "project")
+                and not doc.get(fieldname)
+            ):
+                continue
             field_override = deepcopy(field_overrides.get(fieldname) or {})
             if is_site_scoped_portal_user() and fieldname == SITE_FIELD:
                 field_override["force_read_only"] = True
@@ -2324,6 +2434,9 @@ def _serialize_document_form(route_key, doc, name=None, can_save=True, mapping_t
                 and meta.has_field("transaction_date")
             ):
                 field_override.setdefault("min_date_field", "transaction_date")
+            if route_key == "delivery_challan" and fieldname == "movement_category":
+                if not frappe.has_permission("Sales Invoice", ptype="create") and doc.get(fieldname) != "Sales":
+                    field_override["options"] = "Store to Store\nMaterial Issue"
             field = _serialize_form_field(
                 meta,
                 fieldname,
@@ -3285,6 +3398,73 @@ def run_delivery_challan_action(name, action, closure_type=None, shortage_reason
 
 
 @frappe.whitelist()
+def get_item_variant_options(item):
+    """Return a Variant Template's declared attributes, each paired with its
+    full list of possible values, for the portal's "Create Variants" dialog."""
+    _require_authenticated_user()
+    _require_doctype_permission("Item", "read")
+    doc = frappe.get_doc("Item", item)
+    doc.check_permission("read")
+    if not doc.has_variants:
+        frappe.throw(_("{0} is not a Variant Template.").format(item))
+
+    attributes = []
+    for row in doc.get("attributes") or []:
+        if not row.attribute:
+            continue
+        attribute_doc = frappe.get_cached_doc("Item Attribute", row.attribute)
+        attributes.append(
+            {
+                "attribute": row.attribute,
+                "values": [value.attribute_value for value in attribute_doc.item_attribute_values],
+            }
+        )
+
+    return {"item": doc.name, "item_name": doc.item_name, "attributes": attributes}
+
+
+@frappe.whitelist()
+def create_item_variants(item, selections):
+    """Create one Item Variant per selected attribute-value combination (the
+    cartesian product) using ERPNext's own variant-creation engine as-is --
+    this only validates the portal picker's input before handing off."""
+    _require_authenticated_user()
+    deny_read_only_portal_write()
+    _require_doctype_permission("Item", "create")
+    doc = frappe.get_doc("Item", item)
+    doc.check_permission("read")
+    if not doc.has_variants:
+        frappe.throw(_("{0} is not a Variant Template.").format(item))
+
+    selections = frappe.parse_json(selections) if isinstance(selections, str) else selections
+    if not isinstance(selections, dict):
+        frappe.throw(_("Invalid variant attribute selection."))
+
+    template_attributes = {row.attribute for row in (doc.get("attributes") or []) if row.attribute}
+    cleaned = {}
+    for attribute, values in selections.items():
+        if attribute not in template_attributes:
+            continue
+        values = [cstr(value).strip() for value in (values or []) if cstr(value).strip()]
+        if values:
+            cleaned[attribute] = values
+
+    missing = template_attributes - set(cleaned.keys())
+    if missing:
+        frappe.throw(_("Select at least one value for: {0}").format(", ".join(sorted(missing))))
+
+    method = frappe.get_attr("erpnext.controllers.item_variant.enqueue_multiple_variant_creation")
+    # enqueue_multiple_variant_creation only assigns its own local `variants` name
+    # inside `if isinstance(args, str)` but then unconditionally loops over it --
+    # passing a dict crashes with UnboundLocalError. Native desk JS always sends a
+    # JSON string; match that instead of relying on the dict-accepting code path.
+    result = method(item, json.dumps(cleaned))
+    if result == "queued":
+        return {"status": "queued"}
+    return {"status": "created", "count": cint(result)}
+
+
+@frappe.whitelist()
 def get_delivery_challan_receipt_form(name):
     """Build the native, unsaved receipt and render it in the portal form."""
     _require_authenticated_user()
@@ -4004,7 +4184,7 @@ def _serialize_form_field(
         "fieldname": fieldname,
         "label": _(field_override.get("label") or df.label or fieldname),
         "fieldtype": fieldtype,
-        "options": df.options,
+        "options": field_override["options"] if "options" in field_override else df.options,
         "ignore_user_permissions": bool(df.ignore_user_permissions),
         "reqd": bool(field_override["reqd"] if "reqd" in field_override else df.reqd),
         "read_only": not editable,

@@ -272,7 +272,7 @@ class DuxProcurementPortal {
 			if (action === "run-operational") {
 				this.$root.find(".duxp-dropdown.is-open").removeClass("is-open");
 				this.run_operational_action(
-					$target.data("key"), $target.data("name"), $target.data("operational-action")
+					$target.data("key"), $target.data("name"), $target.data("operational-action"), $target.text().trim()
 				);
 			}
 			if (action === "get-payment-outstanding") this.get_payment_outstanding($target.data("mode"));
@@ -1489,6 +1489,16 @@ class DuxProcurementPortal {
 				name: name || undefined,
 			});
 			this.render_document_form(data);
+			if (key === "purchase_order" && !name) {
+				// A brand-new PO can already carry a default Company (e.g. the
+				// user's only/default company) with no user edit ever firing a
+				// "company changed" event, so resolve its billing/shipping
+				// address once here too -- same as ERPNext running company()
+				// on load, not just on a later manual change.
+				const company_control = this.form_controls.company;
+				const company = company_control ? company_control.get_value() : "";
+				if (company) await this.fetch_company_billing_shipping_address(company);
+			}
 		} catch (error) {
 			this.show_error(error);
 		}
@@ -1595,27 +1605,34 @@ class DuxProcurementPortal {
 		}
 	}
 
-	run_operational_action(key, name, action) {
+	run_operational_action(key, name, action, label) {
 		if (!key || !name || !action) return;
 		if (action === "dc_add_material") return this.add_delivery_challan_material(name);
 		if (action === "dc_create_receipt") return this.open_delivery_challan_receipt(name);
 		if (action === "dc_close_shortage") return this.close_delivery_challan_shortage(name);
 		if (action === "dc_dispatch") {
-			return frappe.confirm(__("Dispatch material for {0}? Native stock validations will run.", [name]),
+			return frappe.confirm(__("{0} for {1}? Native stock validations will run.", [label || __("Proceed"), name]),
 				() => this.execute_delivery_challan_action(name, action));
 		}
 		if (action === "indent_material_purchase") return this.open_indent_material_purchase(name);
 		if (action === "indent_delivery_challan") return this.create_indent_delivery_challan(name);
 		if (action === "indent_view_stock") return this.view_indent_stock(name);
 		if (action === "mr_delivery_challan") return this.create_mr_delivery_challan(name);
+		if (action === "item_create_variants") return this.open_item_create_variants(name);
 	}
 
 	add_delivery_challan_material(name) {
+		const category_field = ((this.detail_data || {}).fields || [])
+			.find((field) => field.fieldname === "movement_category");
+		const category = category_field && category_field.value;
+		const is_transfer_category = !category || ["Material", "Store to Store"].includes(category);
 		frappe.prompt([
 			{ fieldname: "item_code", label: __("Item"), fieldtype: "Link", options: "Item", reqd: 1 },
 			{ fieldname: "qty", label: __("Quantity"), fieldtype: "Float", reqd: 1 },
 			{ fieldname: "source_warehouse", label: __("Source Warehouse"), fieldtype: "Link", options: "Warehouse" },
-			{ fieldname: "target_warehouse", label: __("Target Warehouse"), fieldtype: "Link", options: "Warehouse" },
+			...(is_transfer_category
+				? [{ fieldname: "target_warehouse", label: __("Target Warehouse"), fieldtype: "Link", options: "Warehouse" }]
+				: []),
 			{ fieldname: "remarks", label: __("Remarks"), fieldtype: "Small Text" },
 		], async (values) => {
 			await this.call("dux_indent_master.portal.append_delivery_challan_material", { name, ...values });
@@ -1881,6 +1898,84 @@ class DuxProcurementPortal {
 			dialog.show();
 		} catch (error) {
 			this.show_action_error(error, __("Delivery Challan Creation Failed"));
+		}
+	}
+
+	async open_item_create_variants(name) {
+		try {
+			const data = await this.call("dux_indent_master.portal.get_item_variant_options", { item: name });
+			const attributes = data.attributes || [];
+			if (!attributes.length) return frappe.msgprint(__("This Variant Template has no attributes to select from."));
+			const sections = attributes.map((attribute) => `
+				<div class="duxp-variant-attribute" data-attribute="${this.escape(attribute.attribute)}">
+					<div class="duxp-variant-attribute-label">${this.escape(attribute.attribute)}</div>
+					${(attribute.values || []).length > 12
+						? `<input type="text" class="form-control duxp-variant-value-filter" placeholder="${this.escape(__("Search {0}…", [attribute.attribute]))}">`
+						: ""}
+					<div class="duxp-variant-values">
+						${(attribute.values || []).map((value) => `
+							<label class="duxp-variant-value-option" data-value-text="${this.escape(value.toLowerCase())}">
+								<input type="checkbox" value="${this.escape(value)}"> <span>${this.escape(value)}</span>
+							</label>
+						`).join("") || `<span class="duxp-muted">${__("No values defined for this attribute")}</span>`}
+					</div>
+				</div>
+			`).join("");
+			const dialog = new frappe.ui.Dialog({
+				title: __("Create Variants — {0}", [data.item_name || data.item]),
+				size: "large",
+				fields: [{
+					fieldname: "attributes_html",
+					fieldtype: "HTML",
+					options: `<div class="duxp-variant-picker">${sections}</div><div class="duxp-variant-count" data-role="variant-count">${__("Select at least one value per attribute")}</div>`,
+				}],
+				primary_action_label: __("Create Variants"),
+				primary_action: async () => {
+					const selections = {};
+					let total = 1;
+					dialog.$wrapper.find(".duxp-variant-attribute").each((index, element) => {
+						const $element = $(element);
+						const values = $element.find("input[type=checkbox]:checked").map((i, input) => input.value).get();
+						selections[$element.data("attribute")] = values;
+						total *= values.length || 0;
+					});
+					if (!total) return frappe.msgprint(__("Select at least one value for every attribute."));
+					try {
+						const result = await this.call("dux_indent_master.portal.create_item_variants", {
+							item: name,
+							selections: JSON.stringify(selections),
+						});
+						dialog.hide();
+						if (result.status === "queued") {
+							frappe.show_alert({ message: __("Creating variants in the background — refresh the list shortly."), indicator: "blue" });
+						} else {
+							frappe.show_alert({ message: __("{0} variant(s) created.", [result.count]), indicator: "green" });
+						}
+						await this.open_document_detail("item", name);
+					} catch (error) {
+						this.show_action_error(error, __("Create Variants Failed"));
+					}
+				},
+			});
+			dialog.$wrapper.on("change", "input[type=checkbox]", () => {
+				let total = 1;
+				dialog.$wrapper.find(".duxp-variant-attribute").each((index, element) => {
+					total *= $(element).find("input[type=checkbox]:checked").length || 0;
+				});
+				dialog.$wrapper.find('[data-role="variant-count"]').text(
+					total ? __("{0} variant(s) will be created", [total]) : __("Select at least one value per attribute")
+				);
+			});
+			dialog.$wrapper.on("input", ".duxp-variant-value-filter", (event) => {
+				const query = $(event.currentTarget).val().trim().toLowerCase();
+				$(event.currentTarget).closest(".duxp-variant-attribute").find(".duxp-variant-value-option").each((index, element) => {
+					const $option = $(element);
+					$option.toggle(!query || $option.data("value-text").includes(query));
+				});
+			});
+			dialog.show();
+		} catch (error) {
+			this.show_action_error(error, __("Unable to Load Variant Attributes"));
 		}
 	}
 
@@ -2461,6 +2556,19 @@ class DuxProcurementPortal {
 			label: in_table ? "" : field.label,
 			read_only: field.read_only || !this.form_data.can_save ? 1 : 0,
 		};
+		if (
+			!in_table
+			&& df.read_only
+			&& ["address_display", "billing_address_display", "shipping_address_display", "dispatch_address_display"].includes(df.fieldname)
+		) {
+			// These are always-read-only, server-rendered address HTML (e.g. "367/10...<br>Indore<br>...").
+			// portal.py's _serialize_form_field() downgrades their real "Text Editor" fieldtype to
+			// plain "Small Text" by default (opt back in per-field via "keep_rich_text"), so the stock
+			// control renders them as a plain textarea-like value -- the markup shows up as literal
+			// "<br>" text instead of a line break. Render it as sanitized static HTML instead, same
+			// allowlist-based formatter (format_address_value) already used in the read-only detail view.
+			return this.make_static_address_control($slot, df, value);
+		}
 		if (["Link", "Dynamic Link"].includes(df.fieldtype)) {
 			// This form has no frm/docname context, so ControlLink's async
 			// validate_link_and_fetch round-trip has nothing to validate against and
@@ -2491,6 +2599,18 @@ class DuxProcurementPortal {
 			});
 		} else if (df.fieldtype === "Link" && ["Warehouse", "Account", "Cost Center", "Project", "Town At Project"].includes(df.options)) {
 			df.get_query = () => ({ filters: this.link_filters(df.options) });
+		} else if (df.fieldtype === "Link" && df.options === "Address" && ["supplier_address", "dispatch_address", "billing_address", "shipping_address"].includes(df.fieldname)) {
+			// Mirrors ERPNext's own Buying-form query wiring (erpnext/public/js/controllers/buying.js):
+			// supplier/dispatch address are scoped to the Supplier, billing/shipping address to the Company,
+			// so a company with multiple branch addresses only shows its own addresses, same as native ERP.
+			const link_doctype = ["supplier_address", "dispatch_address"].includes(df.fieldname) ? "Supplier" : "Company";
+			df.get_query = () => ({
+				query: "frappe.contacts.doctype.address.address.address_query",
+				filters: {
+					link_doctype,
+					link_name: (link_doctype === "Supplier" ? this.form_supplier_value() : this.form_company_value()) || "",
+				},
+			});
 		}
 		const control = frappe.ui.form.make_control({ df, parent: $slot, render_input: true });
 		control.duxp_field = field;
@@ -2507,6 +2627,47 @@ class DuxProcurementPortal {
 			initial_value = field.default;
 		}
 		control.set_value(initial_value === null || initial_value === undefined ? "" : initial_value);
+		return control;
+	}
+
+	make_static_address_control($slot, df, value) {
+		let initial_value = value;
+		if (
+			(initial_value === null || initial_value === undefined || initial_value === "")
+			&& this.form_data.is_new
+			&& df.default !== null && df.default !== undefined && df.default !== ""
+		) {
+			initial_value = df.default;
+		}
+		let current_value = initial_value === null || initial_value === undefined ? "" : initial_value;
+		const render = () => {
+			const formatted = current_value ? this.format_address_value(current_value) : "";
+			$slot.html(`
+				<div class="frappe-control" data-fieldname="${this.escape(df.fieldname)}">
+					<div class="form-group">
+						<label class="control-label">${this.escape(df.label || "")}</label>
+						<div class="control-input-wrapper">
+							<div class="control-value like-disabled-input for-description">${
+								formatted || `<span class="duxp-muted">${__("Not set")}</span>`
+							}</div>
+						</div>
+					</div>
+				</div>
+			`);
+		};
+		render();
+		const control = {
+			df,
+			get_value: () => current_value,
+			set_value: (new_value) => {
+				current_value = new_value === null || new_value === undefined ? "" : new_value;
+				render();
+				return Promise.resolve();
+			},
+			duxp_field: df,
+			duxp_base_read_only: true,
+			duxp_base_reqd: false,
+		};
 		return control;
 	}
 
@@ -2535,6 +2696,12 @@ class DuxProcurementPortal {
 			if (control && control.get_value()) return control.get_value();
 		}
 		return this.state && this.state.company ? this.state.company : "";
+	}
+
+	form_supplier_value() {
+		const control = this.form_controls.supplier;
+		if (control && control.get_value()) return control.get_value();
+		return this.state && this.state.supplier ? this.state.supplier : "";
 	}
 
 	parent_form_values() {
@@ -2575,7 +2742,7 @@ class DuxProcurementPortal {
 	apply_control_dependencies(control, field, doc, parent) {
 		if (!control) return;
 		const visible = this.evaluate_dependency(field.depends_on, doc, parent);
-		if (this.form_data && this.form_data.key === "material_request" && control.$wrapper) {
+		if (this.form_data && ["material_request", "delivery_challan"].includes(this.form_data.key) && control.$wrapper) {
 			const $field_slot = control.$wrapper.closest(".duxp-form-control").not(".duxp-table-control");
 			if ($field_slot.length) $field_slot.toggle(visible);
 		}
@@ -2696,6 +2863,15 @@ class DuxProcurementPortal {
 		}
 		if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "supplier" && value) {
 			await this.fetch_supplier_party_details(value);
+		}
+		if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "company" && value) {
+			await this.fetch_company_billing_shipping_address(value);
+		}
+		if (this.form_data && this.form_data.key === "purchase_order"
+			&& ["supplier_address", "billing_address", "shipping_address", "dispatch_address"].includes(fieldname)) {
+			await this.refresh_address_display(fieldname, `${fieldname}_display`);
+			if (fieldname === "billing_address") await this.refresh_company_gstin();
+			if (fieldname === "supplier_address") await this.refresh_supplier_gst_fields();
 		}
         if (this.form_data && this.form_data.key === "purchase_order" && fieldname === "payment_terms_template" && value) {
             await this.apply_purchase_order_payment_terms_template(value);
@@ -2843,6 +3019,7 @@ class DuxProcurementPortal {
 		if (!details) return;
 		[
 			"supplier_address", "address_display",
+			"supplier_gstin", "gst_category",
 			"billing_address", "billing_address_display",
 			"dispatch_address", "dispatch_address_display",
 			"contact_person", "contact_display", "contact_mobile", "contact_email",
@@ -2853,6 +3030,112 @@ class DuxProcurementPortal {
 				control.set_value(details[fieldname]);
 			}
 		});
+	}
+
+	// Mirrors ERPNext's own Purchase Order company() trigger
+	// (erpnext/public/js/controllers/buying.js): resolves the company's own
+	// primary/shipping address, but leaves an already-set address untouched if
+	// it's still linked to the company (same as erpnext.setup.doctype.company
+	// .company.get_billing_shipping_address's own existing_address fallback).
+	async fetch_company_billing_shipping_address(company) {
+		if (!company) return;
+		let result;
+		try {
+			result = await this.call("erpnext.setup.doctype.company.company.get_billing_shipping_address", {
+				name: company,
+				billing_address: this.form_controls.billing_address ? this.form_controls.billing_address.get_value() : "",
+				shipping_address: this.form_controls.shipping_address ? this.form_controls.shipping_address.get_value() : "",
+			});
+		} catch (error) {
+			return;
+		}
+		if (!result) return;
+		const billing_control = this.form_controls.billing_address;
+		if (billing_control) billing_control.set_value(result.primary_address || "");
+		await this.refresh_address_display("billing_address", "billing_address_display");
+		await this.refresh_company_gstin();
+
+		const shipping_control = this.form_controls.shipping_address;
+		if (shipping_control) shipping_control.set_value(result.shipping_address || "");
+		await this.refresh_address_display("shipping_address", "shipping_address_display");
+	}
+
+	// Company Billing Address section's "Company GSTIN" field is fetch_from
+	// billing_address.gstin on the real doctype -- this hand-rolled form has no
+	// generic fetch_from engine, so re-fetch it explicitly whenever billing_address
+	// changes (company-triggered here, or a manual re-pick -- see handle_parent_control_change).
+	async refresh_company_gstin() {
+		const gstin_control = this.form_controls.company_gstin;
+		if (!gstin_control) return;
+		const billing_control = this.form_controls.billing_address;
+		const billing_address = billing_control ? billing_control.get_value() : "";
+		if (!billing_address) {
+			gstin_control.set_value("");
+			return;
+		}
+		let result;
+		try {
+			result = await this.call("frappe.client.get_value", {
+				doctype: "Address",
+				filters: billing_address,
+				fieldname: "gstin",
+			});
+		} catch (error) {
+			return;
+		}
+		gstin_control.set_value((result && result.gstin) || "");
+	}
+
+	// Supplier Address section's "Supplier GSTIN"/"GST Category" are fetch_from
+	// supplier_address.gstin / supplier_address.gst_category on the real doctype --
+	// same reasoning as refresh_company_gstin, but for a manual supplier_address
+	// re-pick (fetch_supplier_party_details already covers the supplier-change case).
+	async refresh_supplier_gst_fields() {
+		const gstin_control = this.form_controls.supplier_gstin;
+		const category_control = this.form_controls.gst_category;
+		if (!gstin_control && !category_control) return;
+		const supplier_address_control = this.form_controls.supplier_address;
+		const supplier_address = supplier_address_control ? supplier_address_control.get_value() : "";
+		if (!supplier_address) {
+			if (gstin_control) gstin_control.set_value("");
+			if (category_control) category_control.set_value("");
+			return;
+		}
+		let result;
+		try {
+			result = await this.call("frappe.client.get_value", {
+				doctype: "Address",
+				filters: supplier_address,
+				fieldname: ["gstin", "gst_category"],
+			});
+		} catch (error) {
+			return;
+		}
+		if (gstin_control) gstin_control.set_value((result && result.gstin) || "");
+		if (category_control) category_control.set_value((result && result.gst_category) || "");
+	}
+
+	// Mirrors erpnext.utils.get_address_display: re-renders an address Link
+	// field's read-only "...Details" text whenever the address itself changes
+	// (manual pick or an auto-fill like fetch_company_billing_shipping_address).
+	async refresh_address_display(address_fieldname, display_fieldname) {
+		const display_control = this.form_controls[display_fieldname];
+		if (!display_control) return;
+		const address_control = this.form_controls[address_fieldname];
+		const address_name = address_control ? address_control.get_value() : "";
+		if (!address_name) {
+			display_control.set_value("");
+			return;
+		}
+		let html;
+		try {
+			html = await this.call("frappe.contacts.doctype.address.address.get_address_display", {
+				address_dict: address_name,
+			});
+		} catch (error) {
+			return;
+		}
+		display_control.set_value(html || "");
 	}
 
     async apply_purchase_order_payment_terms_template(template) {

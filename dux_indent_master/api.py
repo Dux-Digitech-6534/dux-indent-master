@@ -625,6 +625,53 @@ def make_delivery_challan_from_purchase_receipt(source_name, target_doc=None, ar
     )
 
 
+def make_sales_invoice_from_delivery_challan(source_name, target_doc=None, args=None):
+    """"Create Sales Invoice" mapper for a submitted Sales-category Delivery
+    Challan -- same get_mapped_doc pattern as make_delivery_challan_from_purchase_receipt
+    above, builds an *unsaved* Sales Invoice. Delivery Challan Item carries no
+    rate/amount, so pricing is left entirely to the Sales Invoice's own price
+    list / manual entry -- the challan is a pure quantity/logistics document."""
+    from frappe.model.mapper import get_mapped_doc
+
+    def set_missing_values(source, target):
+        target.run_method("set_missing_values")
+        target.run_method("calculate_taxes_and_totals")
+
+    def update_item(source_row, target_row, source_parent):
+        target_row.qty = source_row.qty
+
+    return get_mapped_doc(
+        "Delivery Challan",
+        source_name,
+        {
+            "Delivery Challan": {
+                "doctype": "Sales Invoice",
+                "field_map": {
+                    "company": "company",
+                    "custom_delivery_party": "customer",
+                    "name": "custom_delivery_challan",
+                },
+                "validation": {"docstatus": ["=", 1], "movement_category": ["=", "Sales"]},
+            },
+            "Delivery Challan Item": {
+                "doctype": "Sales Invoice Item",
+                "field_map": {
+                    "item_code": "item_code",
+                    "item_name": "item_name",
+                    "description": "description",
+                    "uom": "uom",
+                    "stock_uom": "stock_uom",
+                    "qty": "qty",
+                    "name": "custom_delivery_challan_item",
+                },
+                "postprocess": update_item,
+            },
+        },
+        target_doc,
+        set_missing_values,
+    )
+
+
 def on_delivery_challan_validate(doc, method=None):
     _set_delivery_challan_item_quantities(doc)
     _validate_delivery_challan_qty_limits(doc)
