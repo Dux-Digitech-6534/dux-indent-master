@@ -3872,3 +3872,42 @@ body.dux-portal-active .duxp-root {
 	font-size: 12px;
 	font-weight: 600;
 }
+
+.duxp-combined-dc-summary {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-bottom: 15px;
+	padding: 10px 12px;
+	border: 1px solid var(--duxp-border);
+	border-radius: 8px;
+	background: var(--duxp-iris-tint);
+	font-size: 12px;
+}
+
+.duxp-combined-dc-summary-row.is-short {
+	color: var(--duxp-danger);
+	font-weight: 600;
+}
+
+.duxp-row-actions-cell {
+	width: 1%;
+	white-space: nowrap;
+	text-align: right;
+}
+
+.duxp-row-delete {
+	width: 30px;
+	height: 30px;
+}
+
+.duxp-row-delete:hover:not(:disabled) {
+	border-color: var(--duxp-danger);
+	color: var(--duxp-danger);
+	background: var(--duxp-danger-bg);
+}
+
+.duxp-row-delete:disabled {
+	opacity: 0.35;
+	cursor: not-allowed;
+}

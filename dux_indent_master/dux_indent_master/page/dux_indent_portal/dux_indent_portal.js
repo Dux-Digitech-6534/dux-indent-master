@@ -26,6 +26,17 @@ const PORTAL_PRINT_FORMATS = {
 	delivery_challan: "JEW Delivery Challan",
 };
 
+// Route keys listed here show a "Purchase Order / Service Order" choice on
+// Print instead of jumping straight to PORTAL_PRINT_FORMATS' default -- the
+// same Purchase Order doctype covers both material POs and service POs, and
+// the only difference on paper is which heading/print format to use.
+const PORTAL_PRINT_FORMAT_CHOICES = {
+	purchase_order: [
+		{ label: "Purchase Order", format: "JEW Purchase Order" },
+		{ label: "Service Order", format: "JEW Service Order" },
+	],
+};
+
 class DuxProcurementPortal {
 	constructor(wrapper) {
 		this.wrapper = wrapper;
@@ -237,7 +248,7 @@ class DuxProcurementPortal {
 			}
 			if (action === "new") this.open_document_form($target.data("key"));
 			if (action === "back-list") this.open_document_list($target.data("key"));
-			if (action === "print-document") this.open_document_print($target.data("key"), $target.data("name"));
+			if (action === "print-document") this.choose_and_print_document($target.data("key"), $target.data("name"));
 			if (action === "download-pdf-external") {
 				this.open_document_pdf_external($target.data("key"), $target.data("name"));
 			}
@@ -296,6 +307,10 @@ class DuxProcurementPortal {
 			if (action === "next") this.change_page(1);
 			if (action === "run-report") this.run_report_filters();
 			if (action === "view-child-table-detail") this.show_child_table_detail(Number($target.data("table-index")));
+			if (action === "delete-list-row") {
+				event.stopPropagation();
+				this.delete_document_list_row($target.data("key"), $target.data("name"));
+			}
 		});
 
 		this.$root.on("change", '[data-role="po-attachment-input"]', (event) => {
@@ -314,7 +329,7 @@ class DuxProcurementPortal {
 		});
 
 		this.$root.on("click", ".duxp-document-row", (event) => {
-			if ($(event.target).closest("a").length) return;
+			if ($(event.target).closest("a, .duxp-row-delete").length) return;
 			const $row = $(event.currentTarget);
 			this.open_document_detail($row.data("key"), $row.data("name"));
 		});
@@ -872,6 +887,13 @@ class DuxProcurementPortal {
 		const rows = (data.rows || []).map((row) => `
 			<tr class="duxp-document-row" data-key="${this.escape(data.key)}" data-name="${this.escape(row.name)}">
 				${(data.columns || []).map((column, index) => `<td class="${index === 0 ? "duxp-id-cell" : ""}">${this.format_value(row[column.fieldname], column, row)}</td>`).join("")}
+				${data.can_delete ? `<td class="duxp-row-actions-cell">
+					<button type="button" class="duxp-icon-btn duxp-row-delete" data-action="delete-list-row"
+						data-key="${this.escape(data.key)}" data-name="${this.escape(row.name)}"
+						${row._deletable ? "" : "disabled"}
+						title="${row._deletable ? this.escape(__("Delete")) : this.escape(__("Cancel this document first, then delete"))}"
+						aria-label="${this.escape(__("Delete"))}">${this.icon("trash", 14)}</button>
+				</td>` : ""}
 			</tr>
 		`).join("");
 		const start = Number(data.start || 0);
@@ -912,10 +934,27 @@ class DuxProcurementPortal {
 					<label class="duxp-filter-select">${this.icon("calendar", 13)}<input type="date" data-role="from-date" value="${this.escape(this.state.from_date)}" title="${__("From Date")}"></label>
 					<label class="duxp-filter-select">${this.icon("calendar", 13)}<input type="date" data-role="to-date" value="${this.escape(this.state.to_date)}" title="${__("To Date")}"></label>
 				</div>
-				<div class="duxp-table-wrap duxp-document-list-table-wrap"><table class="duxp-table"><thead><tr>${(data.columns || []).map((column) => `<th>${this.escape(column.label)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${(data.columns || []).length}">${this.empty_state(__("No documents found"), __("Try changing the search or filters."))}</td></tr>`}</tbody></table></div>
+				<div class="duxp-table-wrap duxp-document-list-table-wrap"><table class="duxp-table"><thead><tr>${(data.columns || []).map((column) => `<th>${this.escape(column.label)}</th>`).join("")}${data.can_delete ? `<th></th>` : ""}</tr></thead><tbody>${rows || `<tr><td colspan="${(data.columns || []).length + (data.can_delete ? 1 : 0)}">${this.empty_state(__("No documents found"), __("Try changing the search or filters."))}</td></tr>`}</tbody></table></div>
 				<div class="duxp-pager"><span>${__("Showing")} ${data.total ? start + 1 : 0}–${end} ${__("of")} ${data.total || 0}</span><div><button data-action="previous" ${can_previous ? "" : "disabled"}>${this.icon("back", 14)}</button><button data-action="next" ${can_next ? "" : "disabled"}>${this.icon("forward", 14)}</button></div></div>
 			</section>
 		`);
+	}
+
+	delete_document_list_row(key, name) {
+		if (!key || !name) return;
+		frappe.confirm(
+			__("Permanently delete {0}? This cannot be undone.", [name]),
+			async () => {
+				try {
+					await this.call("dux_indent_master.portal.delete_portal_document", { route_key: key, name });
+					frappe.show_alert({ message: `${name} ${__("deleted")}`, indicator: "green" });
+					this.open_document_list(key, true);
+				} catch (error) {
+					const message = error && (error.message || error.exc) ? error.message || error.exc : __("Unable to delete document.");
+					frappe.msgprint({ title: __("Delete Failed"), message: this.escape(message), indicator: "red" });
+				}
+			}
+		);
 	}
 
 	async open_document_detail(key, name) {
@@ -2185,6 +2224,8 @@ class DuxProcurementPortal {
 	render_document_form(data) {
 		if (data !== this.form_data) {
 			this.po_attachment_queue = [];
+			this.combined_dc_mode = false;
+			this.combined_dc_original_fields = null;
 		}
 		this.$content.addClass("duxp-form-view").removeClass("duxp-detail-view");
 		this.form_data = data;
@@ -2195,6 +2236,7 @@ class DuxProcurementPortal {
 				table.rows = [{}];
 			}
 		});
+		this.apply_combined_delivery_challan_field_overrides();
 
 		let panel_index = 1;
 		const sections = data.sections || [];
@@ -2274,6 +2316,156 @@ class DuxProcurementPortal {
 			</div>
 		`);
 		this.mount_form_controls();
+		this.setup_combined_delivery_challan_toggle();
+	}
+
+	// -- Combined Jain + Active Delivery Challan ---------------------------
+	// A portal-only convenience for the New Delivery Challan form: the two
+	// companies physically share several warehouses (same base name, e.g.
+	// "Stores - JEWPL" / "Stores - AIL") and the same item can have stock
+	// under either company. This lets the user pick one merged base
+	// warehouse name and one combined quantity per item instead of knowing
+	// the split themselves; dux_indent_master.portal.create_combined_delivery_challan
+	// does the actual split and creates one real, single-company Delivery
+	// Challan per company that ends up with at least one item row (native
+	// ERPNext requires every Delivery Challan to belong to exactly one
+	// company, so this can never be a single document).
+
+	is_combined_delivery_challan_eligible() {
+		return Boolean(this.form_data && this.form_data.key === "delivery_challan" && this.form_data.is_new);
+	}
+
+	find_form_field(fieldname) {
+		for (const section of this.form_data.sections || []) {
+			const field = (section.fields || []).find((item) => item.fieldname === fieldname);
+			if (field) return field;
+		}
+		return null;
+	}
+
+	apply_combined_delivery_challan_field_overrides() {
+		if (!this.is_combined_delivery_challan_eligible()) return;
+		const fields = { source_warehouse: this.find_form_field("source_warehouse"), target_warehouse: this.find_form_field("target_warehouse") };
+		if (!this.combined_dc_original_fields) {
+			this.combined_dc_original_fields = {};
+			Object.entries(fields).forEach(([name, field]) => {
+				if (field) this.combined_dc_original_fields[name] = { fieldtype: field.fieldtype, options: field.options };
+			});
+		}
+		const enabled = Boolean(this.combined_dc_mode && (this.combined_dc_warehouses || []).length);
+		Object.entries(fields).forEach(([name, field]) => {
+			if (!field) return;
+			const original = this.combined_dc_original_fields[name] || {};
+			if (enabled) {
+				field.fieldtype = "Select";
+				field.options = this.combined_dc_warehouses.join("\n");
+			} else {
+				field.fieldtype = original.fieldtype || field.fieldtype;
+				field.options = original.options !== undefined ? original.options : field.options;
+			}
+		});
+	}
+
+	async setup_combined_delivery_challan_toggle() {
+		// Combined mode has no visible toggle of its own -- it turns on purely by
+		// picking the synthetic "Combined" entry in the Company field's own search
+		// (see the Company get_query override in make_form_control and the
+		// company-fieldname branch in handle_parent_control_change). This only
+		// renders the read-only Jain/Active split preview once that's active.
+		if (!this.is_combined_delivery_challan_eligible() || !this.combined_dc_mode) return;
+		const $items_table = this.$content.find('.duxp-form-table-section[data-form-table="items"]').first();
+		if (!$items_table.length) return;
+		let $summary = this.$content.find(".duxp-combined-dc-summary");
+		if (!$summary.length) {
+			$summary = $('<div class="duxp-combined-dc-summary"></div>');
+			$items_table.before($summary);
+		}
+		await this.refresh_combined_delivery_challan_summary();
+	}
+
+	async refresh_combined_delivery_challan_summary() {
+		if (!this.is_combined_delivery_challan_eligible() || !this.combined_dc_mode) return;
+		const $summary = this.$content.find(".duxp-combined-dc-summary");
+		if (!$summary.length) return;
+		const source_base = this.form_controls.source_warehouse ? this.form_controls.source_warehouse.get_value() : "";
+		const rows = this.table_controls.items || [];
+		if (!source_base || !rows.length) {
+			$summary.html(`<small>${__("Pick a Source Warehouse and add items to preview the Jain / Active split.")}</small>`);
+			return;
+		}
+		const lines = [];
+		for (const controls of rows) {
+			const item_code = controls.item_code ? controls.item_code.get_value() : "";
+			const qty = controls.qty ? flt(controls.qty.get_value()) : 0;
+			if (!item_code || qty <= 0) continue;
+			try {
+				const availability = await this.call("dux_indent_master.portal.get_combined_delivery_challan_item_availability", {
+					base_warehouse: source_base,
+					item_code,
+				});
+				const jain_take = Math.min(qty, flt(availability.jain));
+				const active_take = qty - jain_take;
+				const short = qty > flt(availability.total);
+				const line = short
+					? `<strong>${this.escape(item_code)}</strong>: ${__("only")} ${flt(availability.total)} ${__("available at")} ${this.escape(source_base)}`
+					: `<strong>${this.escape(item_code)}</strong>: ${jain_take} ${__("from Jain")}${active_take > 0 ? ` + ${active_take} ${__("from Active")}` : ""}`;
+				lines.push(`<div class="duxp-combined-dc-summary-row ${short ? "is-short" : ""}">${line}</div>`);
+			} catch (error) {
+				// Preview only -- the real check runs again on save.
+			}
+		}
+		$summary.html(lines.join("") || `<small>${__("Add items with a quantity to preview the Jain / Active split.")}</small>`);
+	}
+
+	async save_combined_delivery_challan() {
+		this.form_saving = true;
+		this.$content.find('[data-action="save-form"], [data-action="submit-form"]').prop("disabled", true);
+		try {
+			const values = this.collect_form_values();
+			const items = (values.items || [])
+				.filter((row) => row.item_code && flt(row.qty) > 0)
+				.map((row) => ({ item_code: row.item_code, qty: flt(row.qty), uom: row.uom }));
+			const payload = {
+				movement_category: values.movement_category,
+				source_warehouse_base: values.source_warehouse,
+				target_warehouse_base: values.movement_category === "Store to Store" ? values.target_warehouse : undefined,
+				posting_date: values.posting_date,
+				project: values.project,
+				cost_center: values.cost_center,
+				remarks: values.remarks,
+				custom_delivery_party: values.custom_delivery_party,
+				vehicle_no: values.vehicle_no,
+				driver_name: values.driver_name,
+				driver_mobile: values.driver_mobile,
+				transporter: values.transporter,
+				lr_no: values.lr_no,
+				custom_no_of_pages: values.custom_no_of_pages,
+				custom_transport_gst_no: values.custom_transport_gst_no,
+				custom_mode_of_dispatch: values.custom_mode_of_dispatch,
+				dispatch_from_address: values.dispatch_from_address,
+				dispatch_to_address: values.dispatch_to_address,
+				custom_dux_indent_master: values.custom_dux_indent_master,
+				custom_dux_indent_required_date: values.custom_dux_indent_required_date,
+				items,
+			};
+			const result = await this.call("dux_indent_master.portal.create_combined_delivery_challan", {
+				values: JSON.stringify(payload),
+			});
+			const docs = result.documents || [];
+			const summary = docs.map((doc) => `${this.escape(doc.company)} &rarr; ${this.escape(doc.name)}`).join("<br>");
+			frappe.msgprint({
+				title: __("Combined Delivery Challan Created"),
+				message: `${docs.length > 1 ? __("Two Delivery Challans were created") : __("One Delivery Challan was created")}:<br>${summary}`,
+				indicator: "green",
+			});
+			if (docs.length) await this.open_document_detail("delivery_challan", docs[0].name);
+		} catch (error) {
+			const message = error && (error.message || error.exc) ? error.message || error.exc : __("Unable to save document.");
+			frappe.msgprint({ title: __("Save Failed"), message: this.escape(message), indicator: "red" });
+			this.$content.find('[data-action="save-form"], [data-action="submit-form"]').prop("disabled", false);
+		} finally {
+			this.form_saving = false;
+		}
 	}
 
 	render_form_section(section, panel_index) {
@@ -2611,6 +2803,11 @@ class DuxProcurementPortal {
 					link_name: (link_doctype === "Supplier" ? this.form_supplier_value() : this.form_company_value()) || "",
 				},
 			});
+		} else if (df.fieldtype === "Link" && df.options === "Company" && this.is_combined_delivery_challan_eligible()) {
+			// Adds one synthetic "Combined" entry to the normal Company search --
+			// selecting it (instead of a real Company) is what turns combined mode
+			// on, see handle_parent_control_change and get_delivery_challan_company_options.
+			df.get_query = () => ({ query: "dux_indent_master.portal.get_delivery_challan_company_options" });
 		}
 		const control = frappe.ui.form.make_control({ df, parent: $slot, render_input: true });
 		control.duxp_field = field;
@@ -2849,6 +3046,31 @@ class DuxProcurementPortal {
 			if (value === this.receipt_source_challan || value === this.receipt_loading_challan) return;
 			await this.open_delivery_challan_receipt(value);
 			return;
+		}
+		if (this.is_combined_delivery_challan_eligible() && fieldname === "company") {
+			const is_combined_label = value === "Jain Engineering & Active Infrastructures (Combined)";
+			if (is_combined_label && !this.combined_dc_mode) {
+				this.sync_form_data_from_controls();
+				try {
+					const options = await this.call("dux_indent_master.portal.get_combined_delivery_challan_options", {});
+					this.combined_dc_warehouses = (options && options.warehouses) || [];
+				} catch (error) {
+					this.combined_dc_warehouses = [];
+				}
+				this.combined_dc_mode = true;
+				this.render_document_form(this.form_data);
+				return;
+			}
+			if (!is_combined_label && this.combined_dc_mode) {
+				this.sync_form_data_from_controls();
+				this.combined_dc_mode = false;
+				this.render_document_form(this.form_data);
+				return;
+			}
+		}
+		if (this.combined_dc_mode && this.is_combined_delivery_challan_eligible()
+			&& ["source_warehouse", "movement_category"].includes(fieldname)) {
+			await this.refresh_combined_delivery_challan_summary();
 		}
 		if (this.form_data && this.form_data.key === "purchase_receipt"
 			&& this.form_data.is_new && fieldname === "purchase_order" && value) {
@@ -3430,6 +3652,12 @@ class DuxProcurementPortal {
 			&& ["item_code", "qty", "purchase_qty"].includes(field.fieldname)
 		) {
 			this.refresh_indent_row_balance(table_fieldname, row_index, field.fieldname !== "item_code");
+		}
+		if (
+			this.combined_dc_mode && this.is_combined_delivery_challan_eligible()
+			&& table_fieldname === "items" && ["item_code", "qty"].includes(field.fieldname)
+		) {
+			await this.refresh_combined_delivery_challan_summary();
 		}
 		this.refresh_form_dependencies();
 	}
@@ -4206,6 +4434,9 @@ class DuxProcurementPortal {
 
 	async save_portal_form(submit_after = false) {
 		if (!this.form_data || !this.form_data.can_save || this.form_saving) return;
+		if (this.combined_dc_mode && this.is_combined_delivery_challan_eligible()) {
+			return this.save_combined_delivery_challan();
+		}
 		this.form_saving = true;
 		this.$content.find('[data-action="save-form"], [data-action="submit-form"]').prop("disabled", true);
 		try {
@@ -4446,8 +4677,31 @@ class DuxProcurementPortal {
 		frappe.set_route("Form", doctype, name);
 	}
 
-	open_document_print(key, name) {
-		const format = PORTAL_PRINT_FORMATS[key];
+	choose_and_print_document(key, name) {
+		const choices = PORTAL_PRINT_FORMAT_CHOICES[key];
+		if (!name || !choices || !choices.length) return this.open_document_print(key, name);
+		const dialog = new frappe.ui.Dialog({
+			title: __("Choose Print Format"),
+			fields: [{
+				fieldname: "print_format_choice",
+				fieldtype: "Select",
+				label: __("Print As"),
+				options: choices.map((choice) => choice.label).join("\n"),
+				default: choices[0].label,
+				reqd: 1,
+			}],
+			primary_action_label: __("Print"),
+			primary_action: (values) => {
+				const choice = choices.find((item) => item.label === values.print_format_choice) || choices[0];
+				dialog.hide();
+				this.open_document_print(key, name, choice.format);
+			},
+		});
+		dialog.show();
+	}
+
+	open_document_print(key, name, format_override) {
+		const format = format_override || PORTAL_PRINT_FORMATS[key];
 		const item = this.items[key];
 		if (!name || !format || !item) return;
 		const params = new URLSearchParams({
@@ -4609,6 +4863,7 @@ class DuxProcurementPortal {
 		if (value === null || value === undefined || value === "") return '<span class="duxp-muted">—</span>';
 		if (["status", "row_status", "docstatus"].includes(column.fieldname)) return this.status_tag(value);
 		if (column.fieldname === "disabled") return this.status_tag(Number(value) ? __("Disabled") : __("Active"));
+		if (column.fieldname === "_item_kind") return this.item_kind_tag(value);
 		if (typeof value === "string" && column.fieldtype === "Text Editor") {
 			if (/address/i.test(column.fieldname || "")) {
 				return this.format_address_value(value) || '<span class="duxp-muted">—</span>';
@@ -4719,6 +4974,14 @@ class DuxProcurementPortal {
 		} catch (error) {
 			return "";
 		}
+	}
+
+	item_kind_tag(value) {
+		// Deliberately separate from status_tag()'s generic keyword matching --
+		// this only ever gets these 3 exact values, no risk of a real document
+		// status elsewhere accidentally matching "template"/"variant".
+		const tone = value === "Template" ? "success" : value === "Variant" ? "pending" : "draft";
+		return `<span class="duxp-status duxp-status-${tone}"><i></i>${this.escape(value)}</span>`;
 	}
 
 	status_tag(status) {

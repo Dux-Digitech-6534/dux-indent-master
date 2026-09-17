@@ -34,6 +34,26 @@ SYSTEM_FIELDS = {"name", "owner", "creation", "modified", "modified_by", "docsta
 MAX_PAGE_LENGTH = 50
 COUNT_PAGE_LENGTH = 500
 
+# Combined Jain + Active Delivery Challan: these two companies physically
+# share several warehouses (same base name, e.g. "Stores - JEWPL" / "Stores -
+# AIL") and the same item can have real stock booked under either company's
+# books. A user can request one combined quantity for a base warehouse name
+# and have the portal split it across both companies' actual stock, creating
+# one real single-company Delivery Challan per company that ends up with at
+# least one item row. Native ERPNext requires every Delivery Challan (and
+# every warehouse on it) to belong to exactly one company, so this can never
+# be a single document -- see delivery_challan_custom's validate_warehouse_company.
+COMBINED_DELIVERY_CHALLAN_COMPANIES = {
+    "jain": "Jain Engineering Works (India) Private Limited",
+    "active": "ACTIVE INFRASTRUCTURES LIMITED",
+}
+COMBINED_DELIVERY_CHALLAN_ABBR = {"jain": "JEWPL", "active": "AIL"}
+# Never a real Company -- only ever shows up as a synthetic extra entry in the
+# New Delivery Challan form's own Company search (see
+# get_delivery_challan_company_options), so picking it is what turns combined
+# mode on client-side. Picking any real Company turns it back off.
+COMBINED_DELIVERY_CHALLAN_COMPANY_LABEL = "Jain Engineering & Active Infrastructures (Combined)"
+
 
 # These are ERPNext's own document mappers. Keeping the methods in an
 # allowlist lets the portal expose the native procurement flow without
@@ -1274,6 +1294,13 @@ def get_document_list(
             workflow_status_field,
         ]
     )
+    if route_key == "item":
+        # A quick at-a-glance label -- "Has Variants"/"Variant Of" already exist
+        # as columns but need reading two values together to tell a Template
+        # apart from a Variant from a plain standalone Item. Inserted after
+        # `fields` is built so this synthetic, non-DB column never reaches
+        # the frappe.get_list() query below.
+        columns.insert(1, {"fieldname": "_item_kind", "label": _("Type"), "fieldtype": "Data", "options": None})
     filters = deepcopy(config.get("default_filters") or {})
     filters.update(get_restricted_indent_filters())
     _apply_company_filter(filters, doctype, company)
@@ -1380,6 +1407,22 @@ def get_document_list(
         start=start,
         page_length=page_length,
     )
+    can_delete = "System Manager" in frappe.get_roles(frappe.session.user)
+    if can_delete:
+        # Computed off the raw numeric docstatus before the "status" column
+        # loop below may overwrite it with a display label -- native
+        # frappe.delete_doc already refuses a Submitted (1) document itself,
+        # this just keeps the button from being shown as clickable for one.
+        for row in rows:
+            row["_deletable"] = cint(row.get("docstatus")) in (0, 2)
+    if route_key == "item":
+        for row in rows:
+            if cint(row.get("has_variants")):
+                row["_item_kind"] = "Template"
+            elif row.get("variant_of"):
+                row["_item_kind"] = "Variant"
+            else:
+                row["_item_kind"] = "Item"
     if any(column["fieldname"] == "status" for column in columns):
         for row in rows:
             workflow_status = (
@@ -1426,7 +1469,25 @@ def get_document_list(
             and frappe.has_permission(doctype, ptype="create")
             and not is_read_only_portal_user()
         ),
+        "can_delete": can_delete,
     }
+
+
+@frappe.whitelist()
+def delete_portal_document(route_key, name):
+    """System Manager only: delete a Draft or Cancelled document straight
+    from a portal list view. Frappe's own delete_doc already refuses a
+    Submitted (docstatus 1) document with a clear message -- not
+    reimplemented here, this just gates who ever reaches that call."""
+    _require_authenticated_user()
+    if "System Manager" not in frappe.get_roles(frappe.session.user):
+        frappe.throw(_("Only a System Manager can delete documents from this portal."), frappe.PermissionError)
+    deny_read_only_portal_write()
+    deny_restricted_non_indent_operation()
+    require_restricted_route(route_key)
+    config = _get_document_config(route_key)
+    frappe.delete_doc(config["doctype"], name)
+    return {"name": name}
 
 
 @frappe.whitelist()
@@ -3323,6 +3384,222 @@ def compute_purchase_order_totals(values):
             "rounded_total": flt(doc.rounded_total),
         },
     }
+
+
+def _combined_delivery_challan_available(user=None):
+    """True only if this user can create a Delivery Challan for BOTH combined
+    companies -- a plain doctype-level create permission isn't enough, since
+    a large number of users on this site are restricted to one Company via a
+    User Permission row (e.g. Jain-only, Active-only, Shree Nakoda-only)."""
+    user = user or frappe.session.user
+    if not frappe.has_permission("Delivery Challan", ptype="create", user=user):
+        return False
+
+    rows = frappe.get_all(
+        "User Permission",
+        filters={"user": user, "allow": "Company"},
+        fields=["for_value", "applicable_for"],
+    )
+    restricting_companies = {
+        cstr(row.for_value).strip()
+        for row in rows
+        if not row.applicable_for or row.applicable_for == "Delivery Challan"
+    }
+    if not restricting_companies:
+        return True
+    return set(COMBINED_DELIVERY_CHALLAN_COMPANIES.values()).issubset(restricting_companies)
+
+
+def _combined_delivery_challan_warehouse_names():
+    """Non-group Warehouse base names that exist for both combined companies."""
+    warehouse_sets = []
+    for company in COMBINED_DELIVERY_CHALLAN_COMPANIES.values():
+        names = frappe.get_all(
+            "Warehouse",
+            filters={"company": company, "is_group": 0},
+            pluck="warehouse_name",
+        )
+        warehouse_sets.append({cstr(name).strip() for name in names if name})
+    shared = warehouse_sets[0] & warehouse_sets[1]
+    return sorted(shared)
+
+
+def _combined_delivery_challan_warehouse(base_name, company_key):
+    return f"{base_name} - {COMBINED_DELIVERY_CHALLAN_ABBR[company_key]}"
+
+
+def _combined_delivery_challan_bin_qty(base_name, item_code):
+    result = {}
+    for company_key in COMBINED_DELIVERY_CHALLAN_COMPANIES:
+        warehouse = _combined_delivery_challan_warehouse(base_name, company_key)
+        result[company_key] = flt(
+            frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty")
+        )
+    return result
+
+
+@frappe.whitelist()
+def get_combined_delivery_challan_options():
+    """Whether this user may use combined mode, and which base warehouse
+    names to offer (only those that exist for both companies)."""
+    _require_authenticated_user()
+    deny_restricted_non_indent_operation()
+    available = _combined_delivery_challan_available()
+    return {
+        "available": available,
+        "warehouses": _combined_delivery_challan_warehouse_names() if available else [],
+    }
+
+
+@frappe.whitelist()
+def get_delivery_challan_company_options(doctype, txt, searchfield, start, page_len, filters=None):
+    """Company link query for the New Delivery Challan form only: the normal
+    live Company search, with one synthetic "Combined" entry prepended for
+    users allowed to use it -- this is the only place that option appears,
+    so picking it (instead of a real Company) is what turns combined mode on."""
+    _require_authenticated_user()
+    _require_doctype_permission("Company", "read")
+    search_text = cstr(txt).strip()
+    rows = frappe.get_list(
+        "Company",
+        filters={"name": ["like", f"%{search_text}%"]},
+        fields=["name"],
+        order_by="name asc",
+        start=max(cint(start), 0),
+        page_length=max(cint(page_len), 1),
+    )
+    results = [[row.name] for row in rows]
+    if _combined_delivery_challan_available() and (
+        not search_text or search_text.lower() in COMBINED_DELIVERY_CHALLAN_COMPANY_LABEL.lower()
+    ):
+        results.insert(0, [COMBINED_DELIVERY_CHALLAN_COMPANY_LABEL])
+    return results
+
+
+@frappe.whitelist()
+def get_combined_delivery_challan_item_availability(base_warehouse, item_code):
+    """Live Jain/Active available qty for one item at a combined base
+    warehouse, so the New Delivery Challan form can preview the split before
+    saving."""
+    _require_authenticated_user()
+    deny_restricted_non_indent_operation()
+    if not _combined_delivery_challan_available():
+        frappe.throw(_("Combined Delivery Challan is not available for your account."), frappe.PermissionError)
+    base_warehouse = cstr(base_warehouse).strip()
+    if base_warehouse not in _combined_delivery_challan_warehouse_names():
+        frappe.throw(_("{0} is not a valid combined warehouse.").format(base_warehouse))
+    qty = _combined_delivery_challan_bin_qty(base_warehouse, item_code)
+    return {"jain": qty["jain"], "active": qty["active"], "total": qty["jain"] + qty["active"]}
+
+
+@frappe.whitelist()
+def create_combined_delivery_challan(values):
+    """Split one combined-quantity Delivery Challan request into up to two
+    real, single-company Delivery Challans (Jain's available stock is fully
+    consumed first, any remainder comes from Active), each created and
+    validated entirely through the native DeliveryChallan controller -- this
+    function only ever hands it correct, already-single-company field
+    values, it never duplicates that controller's own validation."""
+    _require_authenticated_user()
+    deny_read_only_portal_write()
+    deny_restricted_non_indent_operation()
+    if not _combined_delivery_challan_available():
+        frappe.throw(_("Combined Delivery Challan is not available for your account."), frappe.PermissionError)
+
+    values = frappe.parse_json(values) if isinstance(values, str) else values
+    if not isinstance(values, dict):
+        frappe.throw(_("Invalid form payload."))
+
+    movement_category = cstr(values.get("movement_category")).strip()
+    if movement_category not in ("Store to Store", "Material Issue", "Sales"):
+        frappe.throw(_("Invalid Category {0}.").format(movement_category))
+
+    is_transfer = movement_category == "Store to Store"
+    valid_warehouses = _combined_delivery_challan_warehouse_names()
+
+    source_base = cstr(values.get("source_warehouse_base")).strip()
+    if source_base not in valid_warehouses:
+        frappe.throw(_("Please select a valid combined Source Warehouse."))
+
+    target_base = None
+    if is_transfer:
+        target_base = cstr(values.get("target_warehouse_base")).strip()
+        if target_base not in valid_warehouses:
+            frappe.throw(_("Please select a valid combined Target Warehouse."))
+
+    items = values.get("items") or []
+    if not items:
+        frappe.throw(_("At least one material item is required."))
+
+    shared_fields = (
+        "posting_date", "project", "cost_center", "remarks", "custom_delivery_party",
+        "vehicle_no", "driver_name", "driver_mobile", "transporter", "lr_no",
+        "custom_no_of_pages", "custom_transport_gst_no", "custom_mode_of_dispatch",
+        "dispatch_from_address", "dispatch_to_address", "custom_dux_indent_master",
+        "custom_dux_indent_required_date",
+    )
+
+    bucket_items = {"jain": [], "active": []}
+    for row in items:
+        item_code = cstr(row.get("item_code")).strip()
+        qty = flt(row.get("qty"))
+        if not item_code or qty <= 0:
+            frappe.throw(_("Item and a quantity greater than zero are required for every row."))
+
+        availability = _combined_delivery_challan_bin_qty(source_base, item_code)
+        total_available = availability["jain"] + availability["active"]
+        if qty > total_available:
+            frappe.throw(
+                _(
+                    "Not enough combined stock for {0} at {1}: requested {2}, only {3} available "
+                    "(Jain {4} + Active {5})."
+                ).format(
+                    item_code, source_base, qty, total_available, availability["jain"], availability["active"]
+                )
+            )
+
+        jain_take = min(qty, availability["jain"])
+        active_take = qty - jain_take
+
+        base_row = {"item_code": item_code, "uom": row.get("uom")}
+        if jain_take > 0:
+            bucket_items["jain"].append({**base_row, "qty": jain_take})
+        if active_take > 0:
+            bucket_items["active"].append({**base_row, "qty": active_take})
+
+    created = []
+    for company_key, rows in bucket_items.items():
+        if not rows:
+            continue
+
+        doc = frappe.new_doc("Delivery Challan")
+        doc.company = COMBINED_DELIVERY_CHALLAN_COMPANIES[company_key]
+        doc.movement_category = movement_category
+        doc.source_warehouse = _combined_delivery_challan_warehouse(source_base, company_key)
+        if is_transfer:
+            doc.target_warehouse = _combined_delivery_challan_warehouse(target_base, company_key)
+
+        for fieldname in shared_fields:
+            if fieldname in values and doc.meta.has_field(fieldname):
+                doc.set(fieldname, values.get(fieldname))
+
+        for row in rows:
+            doc.append("items", row)
+
+        doc.insert()
+        created.append(
+            {
+                "company": doc.company,
+                "company_key": company_key,
+                "name": doc.name,
+                "status": _display_status_value(doc.get("status"), doc.docstatus),
+            }
+        )
+
+    if not created:
+        frappe.throw(_("No Delivery Challan could be created."))
+
+    return {"documents": created}
 
 
 @frappe.whitelist()
